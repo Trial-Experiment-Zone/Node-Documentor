@@ -21,100 +21,115 @@ import { BorderStyle, TextRun } from 'docx';
 @Injectable()
 export class DocxGeneratorService {
   async generate(
+    projectName: string,
     data: ParsedProjectData,
     folderTree: string,
     erdMermaidCode: string,
     apiDocs: any[],
     flows: IdentifiedFlow[],
   ): Promise<Document> {
-    const erdDiagramBlock = erdMermaidCode
-      ? [
-          new Paragraph({
-            text: 'Mermaid ER Diagram Syntax',
-            heading: HeadingLevel.HEADING_2,
-          }),
-          ...erdMermaidCode
-            .split('\n')
-            .map((line) => new Paragraph({ text: line, style: 'Courier' })),
-          new Paragraph({
-            text: '(Paste into https://mermaid.live to visualize)',
-            style: 'IntenseQuote',
-          }),
-        ]
-      : [new Paragraph('No relationships found.')];
+    const titlePage = [
+      new Paragraph({
+        text: 'Project Documentation',
+        heading: HeadingLevel.TITLE,
+        spacing: { after: 400 },
+      }),
+      new Paragraph({
+        text: `Project: ${projectName}`,
+        style: 'IntenseQuote',
+        spacing: { after: 200 },
+      }),
+      new Paragraph({
+        text: `Generated on: ${new Date().toLocaleDateString()}`,
+        style: 'IntenseQuote',
+      }),
+    ];
+
+    const tableOfContents = [
+      new Paragraph({
+        text: 'Table of Contents',
+        heading: HeadingLevel.HEADING_1,
+        pageBreakBefore: true,
+      }),
+      new TableOfContents('Table of Contents', {
+        hyperlink: true,
+        headingStyleRange: '1-3',
+      }),
+    ];
+
+    const folderStructureSection = [
+      new Paragraph({
+        text: 'Folder Structure',
+        heading: HeadingLevel.HEADING_1,
+        pageBreakBefore: true,
+      }),
+      new Paragraph({ text: folderTree, style: 'Courier' }),
+    ];
+
+    const dbSchemaSection = [
+       new Paragraph({
+        text: 'Database Schema',
+        heading: HeadingLevel.HEADING_1,
+        pageBreakBefore: true,
+      }),
+      ...(erdMermaidCode
+        ? [
+            new Paragraph({
+              text: 'Mermaid ER Diagram Syntax',
+              heading: HeadingLevel.HEADING_2,
+            }),
+            ...erdMermaidCode
+              .split('\n')
+              .map((line) => new Paragraph({ text: line, style: 'Courier' })),
+            new Paragraph({
+              text: '(Paste into https://mermaid.live to visualize)',
+              style: 'IntenseQuote',
+            }),
+          ]
+        : [new Paragraph('No relationships found.')]),
+      ...this.formatDatabaseTables(data.entities),
+    ];
+
+    const classDetailsSection = [
+      new Paragraph({
+        text: 'Class & Function Details',
+        heading: HeadingLevel.HEADING_1,
+        pageBreakBefore: true,
+      }),
+      ...this.formatClasses(data.classes),
+      ...this.formatFunctions(data.functions),
+    ];
+
+    const apiEndpointsSection = [
+      new Paragraph({
+        text: 'API Endpoints',
+        heading: HeadingLevel.HEADING_1,
+        pageBreakBefore: true,
+      }),
+      ...this.formatApiDocs(apiDocs),
+    ];
+
+    const projectFlowsSection = [
+       new Paragraph({
+        text: 'Project Flows',
+        heading: HeadingLevel.HEADING_1,
+        pageBreakBefore: true,
+      }),
+      ...this.formatFlows(flows),
+    ];
 
     return new Document({
       features: { updateFields: true },
       sections: [
         {
           children: [
-            // 1. Cover Page
-            new Paragraph({
-              text: '📘 Project Documentation',
-              heading: HeadingLevel.TITLE,
-              spacing: { after: 400 },
-            }),
-            new Paragraph({
-              text: `Project: Project Documentation`,
-              style: 'IntenseQuote',
-            }),
-            new Paragraph({
-              text: `Generated on: ${new Date().toLocaleDateString()}`,
-              style: 'IntenseQuote',
-            }),
-
-            // 2. Table of Contents (on new page)
-            new Paragraph({
-              text: 'Table of Contents',
-              heading: HeadingLevel.HEADING_1,
-              pageBreakBefore: true,
-            }),
-            new TableOfContents('Table of Contents', {
-              hyperlink: true,
-              headingStyleRange: '1-3',
-            }),
-
-            // 3. Folder Structure (on new page)
-            new Paragraph({
-              text: 'Folder Structure',
-              heading: HeadingLevel.HEADING_1,
-              pageBreakBefore: true,
-            }),
-            new Paragraph({ text: folderTree, style: 'Courier' }),
-
-            // 4. Database Schema (on new page)
-            new Paragraph({
-              text: 'Database Schema',
-              heading: HeadingLevel.HEADING_1,
-              pageBreakBefore: true,
-            }),
-            ...erdDiagramBlock,
-            ...this.formatDatabaseTables(data.entities),
-
-            // 5. Class & Function Details (on new page)
-            new Paragraph({
-              text: 'Class & Function Details',
-              heading: HeadingLevel.HEADING_1,
-              pageBreakBefore: true,
-            }),
-            ...this.formatClasses(data.classes),
-            ...this.formatFunctions(data.functions),
-
-            // 6. API Endpoints (on new page)
-            new Paragraph({
-              text: 'API Endpoints',
-              heading: HeadingLevel.HEADING_1,
-              pageBreakBefore: true,
-            }),
-            ...this.formatApiDocs(apiDocs),
-
-            // 7. Project Flows (on new page)
-            new Paragraph({
-              text: 'Project Flows',
-              heading: HeadingLevel.HEADING_1,
-              pageBreakBefore: true,
-            }),
-            ...this.formatFlows(flows),
+            ...titlePage,
+            ...tableOfContents,
+            ...folderStructureSection,
+            ...dbSchemaSection,
+            ...classDetailsSection,
+            ...apiEndpointsSection,
+            ...projectFlowsSection,
           ],
         },
       ],

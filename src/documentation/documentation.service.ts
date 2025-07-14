@@ -75,6 +75,7 @@ export class DocumentationService {
     const flows = analyzeProjectFlows(projectPath);
 
     const doc = await this.docxGenerator.generate(
+      projectName,
       parsedData,
       folderTree,
       erdMermaidCode,

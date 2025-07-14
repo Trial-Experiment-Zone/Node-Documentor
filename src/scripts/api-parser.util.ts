@@ -1,5 +1,16 @@
 import * as path from 'path';
-import { Project, SourceFile, SyntaxKind, Type } from 'ts-morph';
+import { Node, Project, SyntaxKind, Type } from 'ts-morph';
+
+const IGNORED_TYPES = new Set([
+  'Blob',
+  'Promise',
+  'Date',
+  'File',
+  'Response',
+  'Request',
+  'ParamsDictionary',
+  'StreamableFile',
+]);
 
 export function generateApiDoc(projectPath: string): any[] {
   const project = new Project({
@@ -53,7 +64,12 @@ export function generateApiDoc(projectPath: string): any[] {
 
         const decoratorName = decorator.getName(); // Body, Param, Query, etc.
         const type = param.getType();
-        const resolved = extractTypeFieldsByType(project, type);
+        const resolved = extractTypeFieldsByType(
+          project,
+          type,
+          new Set<string>(),
+          projectPath,
+        );
 
         if (resolved) {
           requestParams[decoratorName.toLowerCase()] = resolved;
@@ -67,7 +83,12 @@ export function generateApiDoc(projectPath: string): any[] {
 
       const returnType = method.getReturnType();
       const unwrapped = returnType.getTypeArguments()?.[0] || returnType;
-      const responseDto = extractTypeFieldsByType(project, unwrapped);
+      const responseDto = extractTypeFieldsByType(
+        project,
+        unwrapped,
+        new Set<string>(),
+        projectPath,
+      );
 
       controllers.push({
         controller: controllerClass.getName(),
@@ -86,10 +107,15 @@ function extractTypeFieldsByType(
   project: Project,
   type: Type,
   visitedTypes = new Set<string>(),
+  projectPath: string,
 ): any | null {
   const typeText = type.getText();
   const symbol = type.getSymbol();
   const typeName = symbol?.getName() ?? typeText;
+
+  if (IGNORED_TYPES.has(typeName)) {
+    return null;
+  }
 
   const enumDecl = symbol?.getDeclarations()?.[0];
   if (enumDecl?.getKind() === SyntaxKind.EnumDeclaration) {
@@ -142,19 +168,24 @@ function extractTypeFieldsByType(
   if (type.isUnion()) {
     const unionType = type.getUnionTypes().find((t) => t.getSymbol());
     return unionType
-      ? extractTypeFieldsByType(project, unionType, visitedTypes)
+      ? extractTypeFieldsByType(project, unionType, visitedTypes, projectPath)
       : null;
   }
 
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
-    const sub = extractTypeFieldsByType(project, elem, visitedTypes);
+    const sub = extractTypeFieldsByType(
+      project,
+      elem,
+      visitedTypes,
+      projectPath,
+    );
     return sub ? { ...sub, isArray: true } : null;
   }
 
   if (type.getTypeArguments().length > 0) {
     const inner = type.getTypeArguments()[0];
-    return extractTypeFieldsByType(project, inner, visitedTypes);
+    return extractTypeFieldsByType(project, inner, visitedTypes, projectPath);
   }
 
   if (
@@ -167,7 +198,12 @@ function extractTypeFieldsByType(
       const propDecl = prop.getValueDeclaration();
       if (!propDecl) continue;
       const propType = propDecl.getType();
-      const resolved = extractTypeFieldsByType(project, propType, visitedTypes);
+      const resolved = extractTypeFieldsByType(
+        project,
+        propType,
+        visitedTypes,
+        projectPath,
+      );
       fields[prop.getName()] = resolved?.fields ? resolved : propType.getText();
     }
 
@@ -179,22 +215,37 @@ function extractTypeFieldsByType(
   }
 
   const declaration = symbol?.getDeclarations()?.[0];
-  let classDecl =
-    declaration?.getParentIfKind(SyntaxKind.ClassDeclaration) ||
-    declaration?.getParentIfKind(SyntaxKind.InterfaceDeclaration);
+  let classDecl;
 
-  if (!classDecl && typeText.includes('import(')) {
-    const imported = getTypeFromImportText(project, typeText);
-    if (imported) {
-      const { file, typeName } = imported;
-      const node = file.getClass(typeName) || file.getInterface(typeName);
-      if (node) classDecl = node;
+  if (
+    declaration &&
+    (Node.isClassDeclaration(declaration) ||
+      Node.isInterfaceDeclaration(declaration))
+  ) {
+    classDecl = declaration;
+  }
+
+  // If no direct declaration, it might be an alias from an import.
+  // Follow the alias to the original declaration.
+  if (!classDecl) {
+    const aliasedSymbol = symbol?.getAliasedSymbol();
+    if (aliasedSymbol) {
+      const originalDeclarations = aliasedSymbol.getDeclarations();
+      for (const decl of originalDeclarations) {
+        if (
+          Node.isClassDeclaration(decl) ||
+          Node.isInterfaceDeclaration(decl)
+        ) {
+          classDecl = decl;
+          break;
+        }
+      }
     }
   }
 
   if (!classDecl) {
-    console.warn('[WARN] Could not resolve DTO:', typeText);
-    return null;
+    // This is a soft failure now, we just won't document this DTO fully.
+    return { name: typeName, type: 'unresolved' };
   }
 
   const fields: Record<string, any> = {};
@@ -205,6 +256,7 @@ function extractTypeFieldsByType(
       project,
       propType,
       new Set(visitedTypes),
+      projectPath,
     );
 
     fields[name] = nested?.fields ? nested : propType.getText();
@@ -214,30 +266,4 @@ function extractTypeFieldsByType(
     name: classDecl.getName() || typeText,
     fields,
   };
-}
-
-function getTypeFromImportText(
-  project: Project,
-  typeText: string,
-): { file: SourceFile; typeName: string } | null {
-  const match = typeText.match(/import\(["'](.+?)["']\)\.(\w+)/);
-  if (!match) return null;
-
-  const [_, importPath, typeName] = match;
-
-  // Convert relative TypeScript import path to real file system path
-  let resolvedPath = path.resolve(importPath);
-  if (!resolvedPath.endsWith('.ts')) resolvedPath += '.ts';
-
-  let sourceFile = project.getSourceFile(resolvedPath);
-  if (!sourceFile) {
-    try {
-      sourceFile = project.addSourceFileAtPath(resolvedPath);
-    } catch (e) {
-      console.warn('[WARN] Could not load source file:', resolvedPath);
-      return null;
-    }
-  }
-
-  return { file: sourceFile, typeName };
 }
