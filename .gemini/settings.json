@@ -1,0 +1,13 @@
+{
+  "model": "gemini-2.5-pro",
+  "allowedTools": [
+    "read-file",
+    "write-file",
+    "search-text"
+  ],
+  "restrictedPaths": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.git/**"
+  ]
+}
