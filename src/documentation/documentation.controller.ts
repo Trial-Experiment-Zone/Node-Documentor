@@ -10,23 +10,23 @@ export class DocumentationController {
   constructor(private readonly documentationService: DocumentationService) {}
 
   @Post('generate')
-  @ApiOperation({ summary: 'Generate a .docx file for a project folder' })
+  @ApiOperation({ summary: 'Generate a Markdown documentation file for a project folder' })
   async generateDocumentation(
     @Body() createDocumentationDto: CreateDocumentationDto,
     @Res() res: Response,
   ) {
     try {
-      const buffer = await this.documentationService.generateDocx(
+      const buffer = await this.documentationService.generateDocumentation(
         createDocumentationDto.projectPath,
       );
 
       res.setHeader(
         'Content-Type',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/markdown',
       );
       res.setHeader(
         'Content-Disposition',
-        'attachment; filename=documentation.docx',
+        'attachment; filename=documentation.md',
       );
       res.status(HttpStatus.OK).send(buffer);
     } catch (error: unknown) {
