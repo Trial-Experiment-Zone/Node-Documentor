@@ -1,23 +1,25 @@
 import {
   Injectable,
-  NotFoundException,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { execFile } from 'child_process';
 import * as fs from 'fs';
+import * as glob from 'glob';
 import * as path from 'path';
-import { Packer } from 'docx';
+import { generateApiDoc } from 'src/scripts/api-parser.util';
+import { analyzeProjectFlows } from 'src/scripts/flow-analyzer.util';
+import { generatePythonApiDoc } from 'src/scripts/python-api-parser.util';
+import { parseWebSockets } from 'src/scripts/websocket-parser.util';
 import tree from 'tree-node-cli';
-import { ErdGeneratorService } from '../generators/erd-generator.service';
-import { DocxGeneratorService } from '../generators/docx-generator.service';
 import {
   ParsedProjectData,
-  EntityRelationship,
-  ClassInfo,
-  FunctionInfo,
+  IdentifiedFlow,
+  SocketGatewayInfo,
 } from '../common/types';
-import { generateApiDoc } from 'src/scripts/api-parser.util';
+import { ErdGeneratorService } from '../generators/erd-generator.service';
+import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
 
 @Injectable()
 export class DocumentationService {
@@ -26,7 +28,7 @@ export class DocumentationService {
   constructor(
     private readonly configService: ConfigService,
     private readonly erdGenerator: ErdGeneratorService,
-    private readonly docxGenerator: DocxGeneratorService,
+    private readonly markdownGenerator: MarkdownGeneratorService, // Changed
   ) {
     const relativePath = this.configService.get<string>(
       'GO_PARSER_PATH',
@@ -35,13 +37,43 @@ export class DocumentationService {
     this.goParserExecutablePath = path.resolve(process.cwd(), relativePath);
   }
 
-  public async generateDocx(projectPath: string): Promise<Buffer> {
+  public async generateDocumentation(projectPath: string): Promise<Buffer> {
     if (!fs.existsSync(projectPath)) {
       throw new NotFoundException(`Project path not found: ${projectPath}`);
     }
 
     const parsedData = await this.runGoParser(projectPath);
-    const apiDocs = generateApiDoc(projectPath);
+    let apiDocs = this.findAndParseApiSpec(projectPath);
+
+    if (!apiDocs) {
+      if (this.isTypeScriptProject(projectPath)) {
+        try {
+          apiDocs = generateApiDoc(projectPath);
+        } catch (e) {
+          console.error('Failed to generate API docs from source:', e);
+          apiDocs = [];
+        }
+      } else if (await this.isPythonProject(projectPath)) {
+        try {
+          apiDocs = generatePythonApiDoc(projectPath); // Call the new placeholder function
+          console.log(
+            'Python project detected. Attempting Python API doc generation.',
+          );
+          // TODO: Add database model/entity extraction for Python (Django ORM, SQLAlchemy, etc.)
+          // Example: parsedData.entities = extractPythonEntities(projectPath);
+          // Example: parsedData.relationships = extractPythonRelationships(projectPath);
+        } catch (e) {
+          console.error('Failed to generate API docs from source (Python):', e);
+          apiDocs = [];
+        }
+      } else {
+        console.log(
+          'Skipping API doc generation from source: Not a TypeScript project.',
+        );
+        apiDocs = [];
+      }
+    }
+
     const folderTree = tree(projectPath, {
       exclude: [/node_modules/, /dist/, /\.git/, /output/],
     });
@@ -50,40 +82,60 @@ export class DocumentationService {
     const outputDir = path.resolve(process.cwd(), 'output', projectName);
     await fs.promises.mkdir(outputDir, { recursive: true });
 
-    // ✅ Generate raw mermaid code instead of PNG
     const erdMermaidCode = await this.erdGenerator.generateMermaidCodeOnly(
       parsedData.relationships ?? [],
       outputDir,
     );
 
-    const doc = await this.docxGenerator.generate(
+    // Only analyze flows and sockets for TypeScript projects
+    let flows: IdentifiedFlow[] = [];
+    let webSocketInfo: SocketGatewayInfo[] = [];
+    if (this.isTypeScriptProject(projectPath)) {
+      flows = analyzeProjectFlows(projectPath);
+      webSocketInfo = parseWebSockets(projectPath);
+    }
+
+    // Generate Markdown content
+    const markdownContent = this.markdownGenerator.generate(
+      projectName,
       parsedData,
       folderTree,
-      erdMermaidCode, // ✅ Pass code as string
+      erdMermaidCode,
       apiDocs,
+      flows,
+      webSocketInfo,
     );
 
-    const buffer = await Packer.toBuffer(doc);
-    const filePath = path.join(outputDir, `${projectName}-documentation.docx`);
-    await fs.promises.writeFile(filePath, buffer);
+    // Save the Markdown file
+    const filePath = path.join(outputDir, `${projectName}-documentation.md`);
+    await fs.promises.writeFile(filePath, markdownContent);
 
-    return buffer;
+    // Return the markdown content as a buffer
+    return Buffer.from(markdownContent, 'utf-8');
+  }
+
+  private findAndParseApiSpec(projectPath: string): any[] | null {
+    const specFileNames = ['swagger-spec.json', 'openapi.json', 'swagger.json'];
+    for (const fileName of specFileNames) {
+      const filePath = path.join(projectPath, fileName);
+      if (fs.existsSync(filePath)) {
+        try {
+          const fileContent = fs.readFileSync(filePath, 'utf-8');
+          return JSON.parse(fileContent); // Return the raw spec
+        } catch (e) {
+          console.error(`Error parsing API spec file ${fileName}:`, e);
+          return null;
+        }
+      }
+    }
+    return null;
   }
 
   private runGoParser(projectPath: string): Promise<ParsedProjectData> {
     return new Promise((resolve, reject) => {
-      let executablePath = this.goParserExecutablePath;
-      if (process.platform === 'win32') {
-        executablePath += '.exe';
-      }
-
-      console.log('--- [Go Parser Execution Start] ---');
-      console.log(`[DEBUG] Resolved executable path: ${executablePath}`);
-      console.log(`[DEBUG] Target project path: ${projectPath}`);
-
+      const executablePath = this.goParserExecutablePath;
       if (!fs.existsSync(executablePath)) {
         const errorMsg = `Go parser executable not found: ${executablePath}`;
-        console.error(`[FATAL] ${errorMsg}`);
         return reject(new InternalServerErrorException(errorMsg));
       }
 
@@ -93,45 +145,16 @@ export class DocumentationService {
         { maxBuffer: 1024 * 1024 * 50 },
         (error, stdout, stderr) => {
           if (error) {
-            const errorMessage =
-              error instanceof Error ? error.message : 'Unknown error';
-            console.error(`[FATAL] Go Parser Error:`, errorMessage);
-            console.error(`[STDERR] ${stderr}`);
+            console.error(`Go Parser Error: ${stderr}`);
             return reject(
               new InternalServerErrorException('Go parser failed.'),
             );
           }
-
           try {
-            const outputString = typeof stdout === 'string' ? stdout : '';
-            if (!outputString) {
-              throw new Error('Go parser returned empty output.');
-            }
-
-            const parsedJson: unknown = JSON.parse(outputString);
-            if (
-              typeof parsedJson === 'object' &&
-              parsedJson !== null &&
-              'entities' in parsedJson &&
-              'classes' in parsedJson &&
-              'functions' in parsedJson
-            ) {
-              const transformedData: ParsedProjectData = {
-                entities: parsedJson['entities'] as ClassInfo[],
-                classes: parsedJson['classes'] as ClassInfo[],
-                functions: parsedJson['functions'] as FunctionInfo[],
-                relationships:
-                  (parsedJson['relationships'] as EntityRelationship[]) || [],
-              };
-              resolve(transformedData);
-            } else {
-              throw new Error('Go parser JSON structure is invalid.');
-            }
+            const parsedJson: ParsedProjectData = JSON.parse(stdout);
+            resolve(parsedJson);
           } catch (err) {
-            const errorMessage =
-              err instanceof Error ? err.message : 'Unknown parse error';
-            console.error(`[FATAL] JSON parsing error:`, errorMessage);
-            console.error(`[STDOUT] ${stdout}`);
+            console.error(`JSON parsing error: ${err}. STDOUT: ${stdout}`);
             reject(
               new InternalServerErrorException(
                 'Failed to parse Go parser output.',
@@ -141,5 +164,23 @@ export class DocumentationService {
         },
       );
     });
+  }
+
+  private isTypeScriptProject(projectPath: string): boolean {
+    const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+    return fs.existsSync(tsConfigPath);
+  }
+
+  private async isPythonProject(projectPath: string): Promise<boolean> {
+    const pythonFiles = await glob.glob(path.join(projectPath, '**/*.py'), {
+      ignore: ['**/node_modules/**', '**/dist/**', '**/venv/**'],
+    });
+    const hasRequirementsTxt = fs.existsSync(
+      path.join(projectPath, 'requirements.txt'),
+    );
+    const hasPyprojectToml = fs.existsSync(
+      path.join(projectPath, 'pyproject.toml'),
+    );
+    return pythonFiles.length > 0 || hasRequirementsTxt || hasPyprojectToml;
   }
 }

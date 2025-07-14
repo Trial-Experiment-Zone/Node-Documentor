@@ -41,3 +41,24 @@ export interface EntityRelationship {
   to: string;
   type: 'OneToOne' | 'OneToMany' | 'ManyToOne' | 'ManyToMany';
 }
+
+export interface IdentifiedFlow {
+  keyword: string;
+  filePath: string;
+  relevantCode: string;
+}
+
+// --- WebSocket Types ---
+
+export interface SocketMessageInfo {
+  eventName: string;
+  payload: string;
+  ack: string;
+}
+
+export interface SocketGatewayInfo {
+  name: string;
+  filePath: string;
+  subscribedMessages: SocketMessageInfo[];
+  emittedEvents: SocketMessageInfo[];
+}

@@ -20,7 +20,7 @@
             "description": ""
           }
         },
-        "summary": "Generate a .docx file for a project folder",
+        "summary": "Generate a Markdown documentation file for a project folder",
         "tags": [
           "Documentation"
         ]
