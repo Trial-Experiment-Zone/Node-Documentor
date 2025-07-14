@@ -41,3 +41,9 @@ export interface EntityRelationship {
   to: string;
   type: 'OneToOne' | 'OneToMany' | 'ManyToOne' | 'ManyToMany';
 }
+
+export interface IdentifiedFlow {
+  keyword: string;
+  filePath: string;
+  relevantCode: string;
+}

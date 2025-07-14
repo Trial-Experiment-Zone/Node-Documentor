@@ -14,6 +14,7 @@ import {
   ClassInfo,
   FunctionInfo,
   MethodInfo,
+  IdentifiedFlow,
 } from '../common/types';
 import { BorderStyle, TextRun } from 'docx';
 
@@ -24,6 +25,7 @@ export class DocxGeneratorService {
     folderTree: string,
     erdMermaidCode: string,
     apiDocs: any[],
+    flows: IdentifiedFlow[],
   ): Promise<Document> {
     const erdDiagramBlock = erdMermaidCode
       ? [
@@ -105,6 +107,14 @@ export class DocxGeneratorService {
               pageBreakBefore: true,
             }),
             ...this.formatApiDocs(apiDocs),
+
+            // 7. Project Flows (on new page)
+            new Paragraph({
+              text: 'Project Flows',
+              heading: HeadingLevel.HEADING_1,
+              pageBreakBefore: true,
+            }),
+            ...this.formatFlows(flows),
           ],
         },
       ],
@@ -128,6 +138,46 @@ export class DocxGeneratorService {
       },
     });
   }
+
+  private formatFlows(flows: IdentifiedFlow[]): Paragraph[] {
+    if (!flows || flows.length === 0) {
+      return [new Paragraph('No specific project flows were identified.')];
+    }
+
+    const paragraphs: Paragraph[] = [];
+    const flowsByKeyword: Record<string, IdentifiedFlow[]> = {};
+
+    // Group flows by keyword
+    for (const flow of flows) {
+      if (!flowsByKeyword[flow.keyword]) {
+        flowsByKeyword[flow.keyword] = [];
+      }
+      flowsByKeyword[flow.keyword].push(flow);
+    }
+
+    for (const keyword in flowsByKeyword) {
+      paragraphs.push(
+        new Paragraph({
+          text: `Flow: ${keyword}`,
+          heading: HeadingLevel.HEADING_2,
+        }),
+        new Paragraph('The following files appear to be related to this flow:'),
+      );
+      for (const flow of flowsByKeyword[keyword]) {
+        paragraphs.push(
+          new Paragraph({
+            text: `- ${flow.filePath}`,
+            bullet: { level: 0 },
+            style: 'Courier',
+          }),
+        );
+      }
+    }
+
+    return paragraphs;
+  }
+
+
 
   private formatDatabaseTables(entities: ClassInfo[]): (Paragraph | Table)[] {
     if (!entities || entities.length === 0) return [];

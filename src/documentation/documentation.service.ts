@@ -18,6 +18,7 @@ import {
   FunctionInfo,
 } from '../common/types';
 import { generateApiDoc } from 'src/scripts/api-parser.util';
+import { analyzeProjectFlows } from 'src/scripts/flow-analyzer.util';
 
 @Injectable()
 export class DocumentationService {
@@ -41,7 +42,23 @@ export class DocumentationService {
     }
 
     const parsedData = await this.runGoParser(projectPath);
-    const apiDocs = generateApiDoc(projectPath);
+
+    // New strategy: Look for OpenAPI/Swagger spec first
+    let apiDocs = this.findAndParseApiSpec(projectPath);
+
+    // Fallback to existing TS-morph parser if no spec is found
+    if (!apiDocs) {
+      console.log(
+        'No OpenAPI/Swagger spec found. Falling back to TypeScript parsing.',
+      );
+      try {
+        apiDocs = generateApiDoc(projectPath);
+      } catch (e) {
+        console.error('Failed to generate API docs from source:', e);
+        apiDocs = []; // Ensure apiDocs is an array
+      }
+    }
+
     const folderTree = tree(projectPath, {
       exclude: [/node_modules/, /dist/, /\.git/, /output/],
     });
@@ -50,17 +67,19 @@ export class DocumentationService {
     const outputDir = path.resolve(process.cwd(), 'output', projectName);
     await fs.promises.mkdir(outputDir, { recursive: true });
 
-    // ✅ Generate raw mermaid code instead of PNG
     const erdMermaidCode = await this.erdGenerator.generateMermaidCodeOnly(
       parsedData.relationships ?? [],
       outputDir,
     );
 
+    const flows = analyzeProjectFlows(projectPath);
+
     const doc = await this.docxGenerator.generate(
       parsedData,
       folderTree,
-      erdMermaidCode, // ✅ Pass code as string
+      erdMermaidCode,
       apiDocs,
+      flows,
     );
 
     const buffer = await Packer.toBuffer(doc);
@@ -68,6 +87,40 @@ export class DocumentationService {
     await fs.promises.writeFile(filePath, buffer);
 
     return buffer;
+  }
+
+  private findAndParseApiSpec(projectPath: string): any[] | null {
+    const specFileNames = ['swagger-spec.json', 'openapi.json', 'swagger.json'];
+    for (const fileName of specFileNames) {
+      const filePath = path.join(projectPath, fileName);
+      if (fs.existsSync(filePath)) {
+        try {
+          console.log(`Found API specification file: ${fileName}`);
+          const fileContent = fs.readFileSync(filePath, 'utf-8');
+          const spec = JSON.parse(fileContent);
+          // Basic transformation to the format expected by the docx generator.
+          // This would need to be more robust for full compatibility.
+          const apiDocs: any[] = [];
+          for (const apiPath in spec.paths) {
+            for (const method in spec.paths[apiPath]) {
+              const endpoint = spec.paths[apiPath][method];
+              apiDocs.push({
+                route: `${method.toUpperCase()} ${apiPath}`,
+                methodName: endpoint.operationId || 'N/A',
+                description: endpoint.summary || '',
+                requestParams: endpoint.parameters || [],
+                responseDto: endpoint.responses || {},
+              });
+            }
+          }
+          return apiDocs;
+        } catch (e) {
+          console.error(`Error parsing API spec file ${fileName}:`, e);
+          return null;
+        }
+      }
+    }
+    return null;
   }
 
   private runGoParser(projectPath: string): Promise<ParsedProjectData> {

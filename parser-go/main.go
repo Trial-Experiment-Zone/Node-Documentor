@@ -13,25 +13,23 @@ func main() {
 	if len(os.Args) < 2 {
 		log.Fatal("Missing project path")
 	}
-	projectPath, _ := filepath.Abs(os.Args[1])
-
-	parsers := []parser.Parser{
-		&parser.TypeORMParser{},
-		&parser.SequelizeParser{},
-		&parser.MongooseParser{},
+	projectPath, err := filepath.Abs(os.Args[1])
+	if err != nil {
+		log.Fatalf("Failed to get absolute path: %v", err)
 	}
 
-	for _, p := range parsers {
-		if p.Supports(projectPath) {
-			data, err := p.Parse(projectPath)
-			if err != nil {
-				log.Fatalf("Parsing failed: %v", err)
-			}
-			jsonOut, _ := json.MarshalIndent(data, "", "  ")
-			fmt.Println(string(jsonOut))
-			return
-		}
+	// The new, single, unified parser
+	p := &parser.UnifiedParser{}
+
+	data, err := p.Parse(projectPath)
+	if err != nil {
+		log.Fatalf("Parsing failed: %v", err)
 	}
 
-	log.Fatal("No supported parser found for the given project")
+	jsonOut, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal JSON: %v", err)
+	}
+
+	fmt.Println(string(jsonOut))
 }
