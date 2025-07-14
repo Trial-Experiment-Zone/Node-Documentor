@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { Project, ClassDeclaration, Decorator, Type, Node } from 'ts-morph';
+import { Project, ClassDeclaration, Decorator, Type, Node, PropertyDeclaration } from 'ts-morph';
 import { ClassInfo, PropertyInfo, EntityRelationship } from '../common/types';
 
 // --- Configuration ---
@@ -74,6 +74,7 @@ function parseRelationships(
   const sourceEntityName = classDeclaration.getName() ?? 'UnknownEntity';
 
   for (const prop of classDeclaration.getProperties()) {
+    // --- Strategy 1: Decorator-based relationships (TypeORM, etc.) ---
     const relDecorator = prop
       .getDecorators()
       .find((d) => RELATIONSHIP_DECORATORS.includes(d.getName()));
@@ -81,21 +82,16 @@ function parseRelationships(
     if (relDecorator) {
       const relationshipType =
         relDecorator.getName() as EntityRelationship['type'];
-
-      // The first argument to the decorator is usually a type reference `() => Type`
       const typeArg = relDecorator.getArguments()[0];
       if (!typeArg) continue;
 
       let targetEntityType: Type | undefined;
-
-      // Check if the argument is an arrow function `() => User` and get its return type
       if (Node.isArrowFunction(typeArg)) {
         targetEntityType = typeArg.getReturnType();
       } else {
-        // Fallback for direct type references, e.g. `@ManyToOne(User)`
         targetEntityType = typeArg.getType();
       }
-
+      
       if (!targetEntityType) continue;
 
       const targetEntityName =
@@ -106,6 +102,39 @@ function parseRelationships(
         to: targetEntityName,
         type: relationshipType,
       });
+      continue; 
+    }
+
+    // --- Strategy 2: @Prop with `ref` (Mongoose) ---
+    const propDecorator = prop.getDecorator('Prop');
+    if (propDecorator) {
+      const propArgs = propDecorator.getArguments()[0];
+      if (propArgs && Node.isObjectLiteralExpression(propArgs)) {
+        const refProperty = propArgs.getProperty('ref');
+        if (refProperty && Node.isPropertyAssignment(refProperty)) {
+          const refInitializer = refProperty.getInitializer();
+          if (refInitializer) {
+            // Handle both string literal refs and identifier refs (e.g., ref: 'User' or ref: User.name)
+            let targetEntityName = '';
+            if (Node.isStringLiteral(refInitializer)) {
+              targetEntityName = refInitializer.getLiteralText();
+            } else if (Node.isPropertyAccessExpression(refInitializer)) {
+              targetEntityName = refInitializer.getExpression().getText();
+            } else {
+              targetEntityName = refInitializer.getText();
+            }
+            
+            const isArray = prop.getType().isArray();
+            const relationshipType = isArray ? 'OneToMany' : 'ManyToOne';
+
+            relationships.push({
+              from: sourceEntityName,
+              to: targetEntityName,
+              type: relationshipType,
+            });
+          }
+        }
+      }
     }
   }
 

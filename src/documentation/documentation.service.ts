@@ -13,6 +13,7 @@ import { MarkdownGeneratorService } from '../generators/markdown-generator.servi
 import { ParsedProjectData, EntityRelationship, ClassInfo, FunctionInfo } from '../common/types';
 import { generateApiDoc } from 'src/scripts/api-parser.util';
 import { analyzeProjectFlows } from 'src/scripts/flow-analyzer.util';
+import { parseWebSockets } from 'src/scripts/websocket-parser.util';
 
 @Injectable()
 export class DocumentationService {
@@ -61,6 +62,7 @@ export class DocumentationService {
     );
 
     const flows = analyzeProjectFlows(projectPath);
+    const webSocketInfo = parseWebSockets(projectPath);
 
     // Generate Markdown content
     const markdownContent = this.markdownGenerator.generate(
@@ -70,6 +72,7 @@ export class DocumentationService {
       erdMermaidCode,
       apiDocs,
       flows,
+      webSocketInfo,
     );
 
     // Save the Markdown file

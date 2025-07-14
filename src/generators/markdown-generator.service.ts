@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { ParsedProjectData, ClassInfo, IdentifiedFlow } from '../common/types';
+import {
+  ParsedProjectData,
+  ClassInfo,
+  IdentifiedFlow,
+  SocketGatewayInfo,
+} from '../common/types';
 
 @Injectable()
 export class MarkdownGeneratorService {
@@ -10,41 +15,89 @@ export class MarkdownGeneratorService {
     erdMermaidCode: string,
     apiDocs: any[],
     flows: IdentifiedFlow[],
+    webSocketInfo: SocketGatewayInfo[],
   ): string {
     let md = '';
 
     // 1. Title Page
-    md += `# Project Documentation: ${projectName}\n\n`;
-    md += `**Generated on:** ${new Date().toLocaleDateString()}\n\n`;
-    md += `\n---\n\n`; // Page break in Pandoc
+    md += `# Project Documentation: ${projectName}
 
-    // 2. Table of Contents placeholder (most Markdown viewers generate this automatically)
-    md += `## Table of Contents\n\n`;
-    md += `*   [Folder Structure](#folder-structure)\n`;
-    md += `*   [Database Schema](#database-schema)\n`;
-    md += `*   [API Endpoints](#api-endpoints)\n`;
-    md += `*   [Project Flows](#project-flows)\n`;
-    md += `\n---\n\n`;
+`;
+    md += `**Generated on:** ${new Date().toLocaleDateString()}
+
+`;
+    md += `
+---
+
+`; // Page break in Pandoc
+
+    // 2. Table of Contents
+    md += `## Table of Contents
+
+`;
+    md += `*   [Folder Structure](#folder-structure)
+`;
+    md += `*   [Database Schema](#database-schema)
+`;
+    md += `*   [API Endpoints](#api-endpoints)
+`;
+    md += `*   [WebSocket API](#websocket-api)
+`;
+    md += `*   [Project Flows](#project-flows)
+`;
+    md += `
+---
+
+`;
 
     // 3. Folder Structure
-    md += `## Folder Structure\n\n`;
+    md += `## Folder Structure
+
+`;
     md += '```\n' + folderTree + '\n```\n\n';
-    md += `\n---\n\n`;
+    md += `
+---
+
+`;
 
     // 4. Database Schema
-    md += `## Database Schema\n\n`;
-    md += `### Entity Relationship Diagram\n\n`;
+    md += `## Database Schema
+
+`;
+    md += `### Entity Relationship Diagram
+
+`;
     md += '```mermaid\n' + erdMermaidCode + '\n```\n\n';
     md += this.formatDatabaseTables(data.entities);
-    md += `\n---\n\n`;
+    md += `
+---
+
+`;
 
     // 5. API Endpoints
-    md += `## API Endpoints\n\n`;
-    md += this.formatApiDocs(apiDocs);
-    md += `\n---\n\n`;
+    md += `## API Endpoints
 
-    // 6. Project Flows
-    md += `## Project Flows\n\n`;
+`;
+    md += this.formatApiDocs(apiDocs);
+    md += `
+---
+
+`;
+
+    // 6. WebSocket API
+    md += `## WebSocket API
+
+`;
+    md += this.formatWebSockets(webSocketInfo);
+    md += `
+---
+
+`;
+
+    // 7. Project Flows
+    md += `## Project Flows
+
+`;
     md += this.formatFlows(flows);
 
     return md;
@@ -117,6 +170,38 @@ export class MarkdownGeneratorService {
       }
       md += '\n';
     }
+    return md;
+  }
+
+  private formatWebSockets(gateways: SocketGatewayInfo[]): string {
+    if (!gateways || gateways.length === 0)
+      return 'No WebSocket gateways found.\n\n';
+
+    let md = '';
+    gateways.forEach((gateway) => {
+      md += `### Gateway: \`${gateway.name}\`\n\n`;
+      md += `*Source: \`${gateway.filePath}\`*\n\n`;
+
+      if (gateway.subscribedMessages.length > 0) {
+        md += `#### Subscribed Messages\n\n`;
+        md += `| Event Name | Payload Type | Ack Type |\n`;
+        md += `|---|---|---|\n`;
+        gateway.subscribedMessages.forEach((msg) => {
+          md += `| \`${msg.eventName}\` | \`${msg.payload}\` | \`${msg.ack}\` |\n`;
+        });
+        md += '\n';
+      }
+
+      if (gateway.emittedEvents.length > 0) {
+        md += `#### Emitted Events\n\n`;
+        md += `| Event Name | Payload Type |\n`;
+        md += `|---|---|\n`;
+        gateway.emittedEvents.forEach((evt) => {
+          md += `| \`${evt.eventName}\` | \`${evt.payload}\` |\n`;
+        });
+        md += '\n';
+      }
+    });
     return md;
   }
 }
