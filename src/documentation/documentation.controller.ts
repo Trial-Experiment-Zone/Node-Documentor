@@ -27,7 +27,7 @@ export class DocumentationController {
         'Content-Disposition',
         'attachment; filename=documentation.md',
       );
-      res.status(HttpStatus.OK).send(buffer);
+      res.status(HttpStatus.CREATED).send(buffer);
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : 'An unknown error occurred';

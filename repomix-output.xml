@@ -1,0 +1,2834 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.gemini/
+  settings.json
+parser-go/
+  parser/
+    parser.go
+  types/
+    model.go
+  go.mod
+  main.go
+src/
+  common/
+    types.ts
+  documentation/
+    documentation.controller.ts
+    documentation.module.ts
+    documentation.service.ts
+  dtos/
+    create-documentation.dto.ts
+  generators/
+    erd-generator.service.ts
+    markdown-generator.service.ts
+  scripts/
+    api-parser.util.ts
+    flow-analyzer.util.ts
+    interface-parser.ts
+    python-api-parser.util.ts
+    sample-values.ts
+    websocket-parser.util.ts
+  app.module.ts
+  main.ts
+.gitignore
+.prettierrc
+build-parser.sh
+eslint.config.mjs
+example.env
+GEMINI.md
+nest-cli.json
+package.json
+README.md
+swagger-spec.json
+tsconfig.build.json
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="parser-go/types/model.go">
+package types
+
+type PropertyInfo struct {
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	Decorators []string `json:"decorators"`
+}
+
+type MethodInfo struct {
+	Name       string `json:"name"`
+	Docs       string `json:"docs"`
+	ReturnType string `json:"returnType"`
+}
+
+type ClassInfo struct {
+	Name       string         `json:"name"`
+	FilePath   string         `json:"filePath"`
+	Docs       string         `json:"docs"`
+	Methods    []MethodInfo   `json:"methods"`
+	Properties []PropertyInfo `json:"properties"`
+}
+
+type RelationshipInfo struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Type string `json:"type"`
+}
+
+type APIFunctionInfo struct {
+	Name       string `json:"name"`
+	Method     string `json:"method"`
+	Route      string `json:"route"`
+	Docs       string `json:"docs"`
+	ReturnType string `json:"returnType"`
+}
+
+type ParsedProjectData struct {
+	Entities      []ClassInfo        `json:"entities"`
+	Classes       []ClassInfo        `json:"classes"`
+	Functions     []APIFunctionInfo  `json:"functions"`
+	Relationships []RelationshipInfo `json:"relationships"`
+}
+</file>
+
+<file path="parser-go/go.mod">
+module project-documenter/parser
+
+go 1.23.6
+
+require (
+	github.com/bmatcuk/doublestar/v4 v4.8.1
+	github.com/evanw/esbuild v0.25.5
+)
+
+require golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8 // indirect
+</file>
+
+<file path="src/dtos/create-documentation.dto.ts">
+// src/documentation/dto/create-documentation.dto.ts
+import { IsNotEmpty, IsString } from 'class-validator';
+
+export class CreateDocumentationDto {
+  @IsString()
+  @IsNotEmpty()
+  projectPath: string;
+}
+</file>
+
+<file path="src/generators/erd-generator.service.ts">
+import { Injectable } from '@nestjs/common';
+import * as path from 'path';
+import * as fs from 'fs';
+import { EntityRelationship } from '../common/types';
+
+@Injectable()
+export class ErdGeneratorService {
+  async generateMermaidCodeOnly(
+    relationships: EntityRelationship[],
+    outputDir: string,
+  ): Promise<string> {
+    if (!relationships.length)
+      return 'erDiagram\n    %% No relationships found';
+
+    const relationshipMap = {
+      OneToOne: '||--||',
+      ManyToOne: 'o|--||',
+      OneToMany: '||--|o',
+      ManyToMany: 'o|--|o',
+    };
+
+    let mermaidSyntax = 'erDiagram\n';
+    relationships.forEach((rel) => {
+      const link = relationshipMap[rel.type];
+      if (!link) return;
+      mermaidSyntax += `    ${rel.from} ${link} ${rel.to} : ""\n`;
+    });
+
+    const mermaidFilePath = path.join(outputDir, 'erd.mmd');
+    await fs.promises.mkdir(outputDir, { recursive: true });
+    await fs.promises.writeFile(mermaidFilePath, mermaidSyntax);
+    return mermaidSyntax;
+  }
+}
+</file>
+
+<file path="src/scripts/python-api-parser.util.ts">
+import * as path from 'path';
+import * as fs from 'fs';
+import { Node, Project, SyntaxKind, Type } from 'ts-morph';
+
+const IGNORED_TYPES = new Set([
+  'Blob',
+  'Promise',
+  'Date',
+  'File',
+  'Response',
+  'Request',
+  'ParamsDictionary',
+  'StreamableFile',
+]);
+
+export function generatePythonApiDoc(projectPath: string): any[] {
+  const controllers: any[] = [];
+
+  try {
+    // Common Python web framework patterns
+    const possiblePaths = [
+      path.join(projectPath, 'app'),
+      path.join(projectPath, 'src'),
+      path.join(projectPath, 'api'),
+      projectPath,
+    ];
+
+    for (const searchPath of possiblePaths) {
+      if (fs.existsSync(searchPath)) {
+        const pythonFiles = findPythonFiles(searchPath);
+
+        for (const filePath of pythonFiles) {
+          const endpoints = parsePythonFile(filePath);
+          controllers.push(...endpoints);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error generating Python API docs: ${error}`);
+  }
+
+  return controllers;
+}
+
+function findPythonFiles(dir: string): string[] {
+  const files: string[] = [];
+
+  function traverse(currentDir: string) {
+    const items = fs.readdirSync(currentDir);
+
+    for (const item of items) {
+      const fullPath = path.join(currentDir, item);
+      const stat = fs.statSync(fullPath);
+
+      if (
+        stat.isDirectory() &&
+        !item.startsWith('.') &&
+        item !== '__pycache__'
+      ) {
+        traverse(fullPath);
+      } else if (item.endsWith('.py')) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  traverse(dir);
+  return files;
+}
+
+function parsePythonFile(filePath: string): any[] {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const endpoints: any[] = [];
+
+  // Parse different Python web frameworks
+  const flaskEndpoints = parseFlaskEndpoints(content, filePath);
+  const fastApiEndpoints = parseFastApiEndpoints(content, filePath);
+  const djangoEndpoints = parseDjangoEndpoints(content, filePath);
+
+  endpoints.push(...flaskEndpoints, ...fastApiEndpoints, ...djangoEndpoints);
+
+  return endpoints;
+}
+
+function parseFlaskEndpoints(content: string, filePath: string): any[] {
+  const endpoints: any[] = [];
+  const lines = content.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // Flask route decorator pattern: @app.route('/path', methods=['GET'])
+    const routeMatch = line.match(
+      /@(?:app|bp|blueprint)\.route\s*\(\s*['"]([^'"]+)['"](?:.*methods\s*=\s*\[([^\]]+)\])?/,
+    );
+
+    if (routeMatch) {
+      const route = routeMatch[1];
+      const methods = routeMatch[2]
+        ? routeMatch[2]
+            .split(',')
+            .map((m) => m.trim().replace(/['"]/g, '').toUpperCase())
+        : ['GET'];
+
+      // Find the function definition
+      let functionName = '';
+      let functionParams: any = {};
+      let docstring = '';
+
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j].trim();
+        const funcMatch = nextLine.match(/^def\s+(\w+)\s*\(([^)]*)\)/);
+
+        if (funcMatch) {
+          functionName = funcMatch[1];
+          const params = funcMatch[2];
+          functionParams = parseFlaskParams(params);
+
+          // Extract docstring if present
+          if (j + 1 < lines.length && lines[j + 1].trim().startsWith('"""')) {
+            docstring = extractDocstring(lines, j + 1);
+          }
+          break;
+        }
+      }
+
+      methods.forEach((method) => {
+        endpoints.push({
+          controller: path.basename(filePath, '.py'),
+          route: `${method} ${route}`,
+          methodName: functionName,
+          requestParams: functionParams,
+          responseDto: parseFlaskResponse(content, functionName),
+          docstring,
+          framework: 'flask',
+        });
+      });
+    }
+  }
+
+  return endpoints;
+}
+
+function parseFastApiEndpoints(content: string, filePath: string): any[] {
+  const endpoints: any[] = [];
+  const lines = content.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // FastAPI decorator pattern: @app.get("/path"), @app.post("/path"), etc.
+    const routeMatch = line.match(
+      /@(?:app|router)\.(\w+)\s*\(\s*['"]([^'"]+)['"]/,
+    );
+
+    if (routeMatch) {
+      const method = routeMatch[1].toUpperCase();
+      const route = routeMatch[2];
+
+      // Find the function definition
+      let functionName = '';
+      let functionParams: any = {};
+      let docstring = '';
+
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j].trim();
+        const funcMatch = nextLine.match(
+          /^(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)/,
+        );
+
+        if (funcMatch) {
+          functionName = funcMatch[1];
+          const params = funcMatch[2];
+          functionParams = parseFastApiParams(params);
+
+          // Extract docstring if present
+          if (j + 1 < lines.length && lines[j + 1].trim().startsWith('"""')) {
+            docstring = extractDocstring(lines, j + 1);
+          }
+          break;
+        }
+      }
+
+      endpoints.push({
+        controller: path.basename(filePath, '.py'),
+        route: `${method} ${route}`,
+        methodName: functionName,
+        requestParams: functionParams,
+        responseDto: parseFastApiResponse(content, functionName),
+        docstring,
+        framework: 'fastapi',
+      });
+    }
+  }
+
+  return endpoints;
+}
+
+function parseDjangoEndpoints(content: string, filePath: string): any[] {
+  const endpoints: any[] = [];
+
+  // Django URL patterns are typically in urls.py files
+  if (path.basename(filePath) === 'urls.py') {
+    const lines = content.split('\n');
+
+    for (const line of lines) {
+      const urlMatch = line.match(
+        /path\s*\(\s*['"]([^'"]+)['"].*?(\w+)\.(\w+)/,
+      );
+
+      if (urlMatch) {
+        const route = urlMatch[1];
+        const viewModule = urlMatch[2];
+        const viewFunction = urlMatch[3];
+
+        endpoints.push({
+          controller: viewModule,
+          route: `* /${route}`, // Django doesn't specify HTTP method in URL patterns
+          methodName: viewFunction,
+          requestParams: {},
+          responseDto: null,
+          framework: 'django',
+        });
+      }
+    }
+  }
+
+  return endpoints;
+}
+
+function parseFlaskParams(paramString: string): any {
+  const params: any = {};
+
+  if (!paramString.trim()) return params;
+
+  const paramParts = paramString.split(',').map((p) => p.trim());
+
+  for (const param of paramParts) {
+    const [name, typeHint] = param.split(':').map((p) => p.trim());
+    if (name && !name.startsWith('*')) {
+      params[name] = {
+        name: name.replace(/\s*=.*$/, ''), // Remove default values
+        type: typeHint || 'any',
+      };
+    }
+  }
+
+  return params;
+}
+
+function parseFastApiParams(paramString: string): any {
+  const params: any = {};
+
+  if (!paramString.trim()) return params;
+
+  const paramParts = paramString.split(',').map((p) => p.trim());
+
+  for (const param of paramParts) {
+    // FastAPI parameter patterns: param: Type = Query(), param: Type = Body(), etc.
+    const match = param.match(/(\w+)\s*:\s*([^=]+)(?:\s*=\s*(.+))?/);
+
+    if (match) {
+      const name = match[1];
+      const type = match[2].trim();
+      const defaultValue = match[3];
+
+      let paramType = 'query';
+      if (defaultValue) {
+        if (defaultValue.includes('Body(')) paramType = 'body';
+        else if (defaultValue.includes('Path(')) paramType = 'param';
+        else if (defaultValue.includes('Query(')) paramType = 'query';
+      }
+
+      params[paramType] = params[paramType] || {};
+      params[paramType][name] = {
+        name,
+        type: type.replace(/Optional\[([^\]]+)\]/, '$1 | null'),
+      };
+    }
+  }
+
+  return params;
+}
+
+function parseFlaskResponse(content: string, functionName: string): any {
+  // Simple heuristic: look for return statements in the function
+  const functionMatch = content.match(
+    new RegExp(`def\\s+${functionName}[^}]*?return\\s+([^\\n]+)`, 's'),
+  );
+
+  if (functionMatch) {
+    const returnStatement = functionMatch[1].trim();
+
+    if (returnStatement.includes('jsonify')) {
+      return { type: 'json', description: 'JSON response' };
+    } else if (returnStatement.includes('render_template')) {
+      return { type: 'html', description: 'HTML template' };
+    } else {
+      return { type: 'unknown', description: returnStatement };
+    }
+  }
+
+  return null;
+}
+
+function parseFastApiResponse(content: string, functionName: string): any {
+  // Look for return type annotations
+  const functionMatch = content.match(
+    new RegExp(`def\\s+${functionName}[^:]*?->\\s*([^:]+):`),
+  );
+
+  if (functionMatch) {
+    const returnType = functionMatch[1].trim();
+    return {
+      type: returnType,
+      description: `Returns ${returnType}`,
+    };
+  }
+
+  return null;
+}
+
+function extractDocstring(lines: string[], startIndex: number): string {
+  let docstring = '';
+  let i = startIndex;
+
+  if (lines[i].trim().startsWith('"""')) {
+    // Multi-line docstring
+    const firstLine = lines[i].trim();
+    if (firstLine.endsWith('"""') && firstLine.length > 6) {
+      // Single line docstring
+      docstring = firstLine.slice(3, -3);
+    } else {
+      // Multi-line docstring
+      i++;
+      while (i < lines.length && !lines[i].trim().endsWith('"""')) {
+        docstring += lines[i] + '\n';
+        i++;
+      }
+    }
+  }
+
+  return docstring.trim();
+}
+
+function extractTypeFieldsByType(
+  project: Project,
+  type: Type,
+  visitedTypes = new Set<string>(),
+  projectPath: string,
+): any | null {
+  const typeText = type.getText();
+  const symbol = type.getSymbol();
+  const typeName = symbol?.getName() ?? typeText;
+
+  if (IGNORED_TYPES.has(typeName)) {
+    return null;
+  }
+
+  const enumDecl = symbol?.getDeclarations()?.[0];
+  if (enumDecl?.getKind() === SyntaxKind.EnumDeclaration) {
+    const members = (enumDecl as any)
+      .getMembers?.()
+      .map((m: any) => m.getName());
+    return {
+      name: typeName,
+      type: 'enum',
+      values: members,
+    };
+  }
+
+  if (visitedTypes.has(typeText)) {
+    return { name: typeName, fields: '[Circular Reference]' };
+  }
+
+  visitedTypes.add(typeText);
+
+  if (
+    type.isStringLiteral() ||
+    type.isNumberLiteral() ||
+    type.isBooleanLiteral()
+  ) {
+    return { name: typeText, type: 'literal', value: typeText };
+  }
+
+  if (type.getSymbol()?.getName() === 'Date') {
+    return { name: 'Date', type: 'primitive' };
+  }
+
+  if (['any', 'unknown', '{}'].includes(typeText.trim())) {
+    return { name: typeText, type: 'primitive' };
+  }
+
+  if (
+    type.isString() ||
+    type.isNumber() ||
+    type.isBoolean() ||
+    type.isUndefined() ||
+    type.isNull() ||
+    type.isVoid() ||
+    type.getSymbol()?.getName() === 'File' ||
+    type.getText().includes('Express.') ||
+    type.getText().startsWith('import("node:')
+  ) {
+    return null;
+  }
+
+  if (type.isUnion()) {
+    const unionType = type.getUnionTypes().find((t) => t.getSymbol());
+    return unionType
+      ? extractTypeFieldsByType(project, unionType, visitedTypes, projectPath)
+      : null;
+  }
+
+  if (type.isArray()) {
+    const elem = type.getArrayElementTypeOrThrow();
+    const sub = extractTypeFieldsByType(
+      project,
+      elem,
+      visitedTypes,
+      projectPath,
+    );
+    return sub ? { ...sub, isArray: true } : null;
+  }
+
+  if (type.getTypeArguments().length > 0) {
+    const inner = type.getTypeArguments()[0];
+    return extractTypeFieldsByType(project, inner, visitedTypes, projectPath);
+  }
+
+  if (
+    type.getText().startsWith('{') &&
+    type.isObject() &&
+    type.getProperties().length > 0
+  ) {
+    const fields: Record<string, any> = {};
+    for (const prop of type.getProperties()) {
+      const propDecl = prop.getValueDeclaration();
+      if (!propDecl) continue;
+      const propType = propDecl.getType();
+      const resolved = extractTypeFieldsByType(
+        project,
+        propType,
+        visitedTypes,
+        projectPath,
+      );
+      fields[prop.getName()] = resolved?.fields ? resolved : propType.getText();
+    }
+
+    return {
+      name: typeName,
+      type: 'inlineObject',
+      fields,
+    };
+  }
+
+  const declaration = symbol?.getDeclarations()?.[0];
+  let classDecl;
+
+  if (
+    declaration &&
+    (Node.isClassDeclaration(declaration) ||
+      Node.isInterfaceDeclaration(declaration))
+  ) {
+    classDecl = declaration;
+  }
+
+  // If no direct declaration, it might be an alias from an import.
+  // Follow the alias to the original declaration.
+  if (!classDecl) {
+    const aliasedSymbol = symbol?.getAliasedSymbol();
+    if (aliasedSymbol) {
+      const originalDeclarations = aliasedSymbol.getDeclarations();
+      for (const decl of originalDeclarations) {
+        if (
+          Node.isClassDeclaration(decl) ||
+          Node.isInterfaceDeclaration(decl)
+        ) {
+          classDecl = decl;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!classDecl) {
+    // This is a soft failure now, we just won't document this DTO fully.
+    return { name: typeName, type: 'unresolved' };
+  }
+
+  const fields: Record<string, any> = {};
+  classDecl.getProperties().forEach((prop) => {
+    const name = prop.getName();
+    const propType = prop.getType();
+    const nested = extractTypeFieldsByType(
+      project,
+      propType,
+      new Set(visitedTypes),
+      projectPath,
+    );
+
+    fields[name] = nested?.fields ? nested : propType.getText();
+  });
+
+  return {
+    name: classDecl.getName() || typeText,
+    fields,
+  };
+}
+</file>
+
+<file path="src/scripts/sample-values.ts">
+export const MOCK_VALUES: Record<string, any> = {
+  id: 'a1b2c3d4',
+  name: 'John Doe',
+  email: 'johndoe@example.com',
+  contactNumber: '+1234567890',
+  address: '123 Example St',
+  abn: '12345678901',
+  createdAt: '2024-01-01T00:00:00.000Z',
+  updatedAt: '2024-01-01T00:00:00.000Z',
+  avatar: 'https://example.com/avatar.png',
+  role: 'FLEET_MANAGER',
+  password: '********',
+  enable2fa: true,
+  accountNumber: '987654321',
+};
+</file>
+
+<file path="src/app.module.ts">
+import { Module } from '@nestjs/common';
+import { DocumentationModule } from './documentation/documentation.module';
+import { ConfigModule } from '@nestjs/config';
+
+@Module({
+  imports: [
+    DocumentationModule,
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
+  ],
+  controllers: [],
+  providers: [],
+})
+export class AppModule {}
+</file>
+
+<file path="src/main.ts">
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as fs from 'fs';
+import { ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  const config = new DocumentBuilder()
+    .setTitle('API Documentation')
+    .setDescription('The API description')
+    .setVersion('1.0')
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+
+  // This line will now work correctly
+  fs.writeFileSync('./swagger-spec.json', JSON.stringify(document, null, 2));
+
+  SwaggerModule.setup('api', app, document);
+
+  app.useGlobalPipes(new ValidationPipe());
+  await app.listen(process.env.PORT ?? 3000);
+  console.log(`Application is running on: ${await app.getUrl()}`);
+}
+bootstrap();
+</file>
+
+<file path=".gitignore">
+# compiled output
+/dist
+/node_modules
+/build
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# OS
+.DS_Store
+
+# Tests
+/coverage
+/.nyc_output
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# temp directory
+.temp
+.tmp
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Diagnostic reports (https://nodejs.org/api/report.html)
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+/output
+</file>
+
+<file path=".prettierrc">
+{
+  "singleQuote": true,
+  "trailingComma": "all"
+}
+</file>
+
+<file path="build-parser.sh">
+#!/bin/bash
+
+# Change this if your Go main package is somewhere else
+GO_SRC_DIR="./parser-go"
+BINARY_NAME="go-parser"
+
+# Platform-specific binary extension
+case "$OSTYPE" in
+  msys*|cygwin*|win32*)
+    BINARY_NAME="${BINARY_NAME}.exe"
+    ;;
+esac
+
+OUTPUT_PATH="${GO_SRC_DIR}/${BINARY_NAME}"
+
+# Ensure directory exists
+if [ ! -d "$GO_SRC_DIR" ]; then
+    echo "❌ Error: Go source directory not found: $GO_SRC_DIR"
+    exit 1
+fi
+
+# Remove old executable
+if [ -f "$OUTPUT_PATH" ]; then
+    echo "Removing old parser executable: $OUTPUT_PATH"
+    rm "$OUTPUT_PATH"
+fi
+
+# Change to source directory to build
+echo "Building parser binary from: $GO_SRC_DIR..."
+cd "$GO_SRC_DIR" || exit 1
+
+# Build Go binary (must have main.go with package main inside)
+go build -o "$BINARY_NAME" .
+
+# Go back to root
+cd - > /dev/null
+
+# Move binary to desired location
+mv "${GO_SRC_DIR}/${BINARY_NAME}" "$OUTPUT_PATH"
+
+# Final confirmation
+if [ -f "$OUTPUT_PATH" ]; then
+    echo "✅ Parser built successfully at: $OUTPUT_PATH"
+else
+    echo "❌ Build failed or binary not found."
+    exit 1
+fi
+</file>
+
+<file path="eslint.config.mjs">
+// @ts-check
+import eslint from '@eslint/js';
+import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
+import globals from 'globals';
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config(
+  {
+    ignores: ['eslint.config.mjs'],
+  },
+  eslint.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked,
+  eslintPluginPrettierRecommended,
+  {
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        ...globals.jest,
+      },
+      sourceType: 'commonjs',
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  {
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-floating-promises': 'warn',
+      '@typescript-eslint/no-unsafe-argument': 'warn'
+    },
+  },
+);
+</file>
+
+<file path="example.env">
+# Path to the Go parser executable, relative to the project root
+GO_PARSER_PATH=./parser-go/go-parser
+</file>
+
+<file path="GEMINI.md">
+# Project: Project Documentation Generator
+
+## Overview
+This project is a sophisticated documentation generator designed to parse and document other projects given their directory path. It leverages a unique architecture:
+- **Go (Golang)**: Used for high-performance, concurrent file parsing, directory traversal, and initial compilation tasks. It's responsible for the "heavy lifting" of analyzing the target project's file structure and content.
+- **Node.js**: Serves as the primary backend API, handling user requests, orchestrating the Go components, managing documentation storage, and serving the generated documentation.
+
+The goal is to provide a robust, scalable, and customizable solution for generating comprehensive project documentation automatically.
+
+## Core Functionality
+- Accepts a project directory path as input.
+- Recursively scans the input directory for relevant files (code, markdown, configuration, etc.).
+- Extracts information (code structure, comments, dependencies, file types).
+- Generates structured documentation (e.g., Markdown, HTML, JSON).
+- Stores and serves the generated documentation via a web API.
+
+## Project Structure (Simplified)
+- `/parser-go`: Contains all Go source code, including the compiler/parser logic.
+- `/src`: Contains all Node.js backend code (API endpoints, service logic, database interactions).
+- `/public`: Static assets for any frontend (if applicable, though the core is backend).
+
+## Coding Standards & Best Practices
+
+### General
+- **Readability is paramount:** Write clear, self-documenting code.
+- **Error Handling:** Implement robust error handling in both Go and Node.js. All critical errors should be logged with sufficient context.
+- **Testing:** Unit and integration tests are crucial. Ensure new features are accompanied by appropriate tests.
+- **Security:** Prioritize security in all API endpoints and data handling. Sanitize inputs, validate outputs.
+
+### Go Specifics
+- **Gofmt & Golint:** All Go code must be formatted with `gofmt` and pass `golint` checks.
+- **Error Wrapping:** Use `fmt.Errorf` with `%w` for error wrapping where appropriate.
+- **Concurrency:** Be mindful of goroutine leaks and race conditions. Use mutexes or channels for safe concurrent access.
+- **Modularity:** Keep functions and packages small and focused.
+
+### Node.js Specifics
+- **ESLint & Prettier:** All JavaScript/TypeScript code must adhere to ESLint rules (configured in `.eslintrc.js`) and be formatted with Prettier.
+- **Asynchronous Operations:** Use `async/await` for asynchronous operations. Avoid callback hell.
+- **Express.js Best Practices:** Follow recommended Express.js patterns for routing, middleware, and error handling.
+- **Dependency Management:** Use `npm` or `yarn` correctly. Keep dependencies up-to-date.
+
+## Prohibited Actions for Gemini Agent
+To ensure the integrity and focus of this project, the Gemini agent is strictly prohibited from:
+
+1.  **Modifying files in `/go-src` without explicit confirmation and a clear understanding of Go language specifics.** Any proposed Go code changes MUST be thoroughly reviewed.
+2.  **Introducing new database schemas or making direct database modifications without explicit instruction and a detailed schema proposal.**
+3.  **Deploying code to any environment (staging, production).** The agent's role is limited to development, analysis, and code generation/refactoring.
+4.  **Accessing external APIs or services not explicitly configured in `/config` or already part of the project's existing dependencies.**
+5.  **Deleting any project files or directories.**
+6.  **Generating documentation for *this* project (the documentation generator itself) using *its own* logic.** While this project documents others, the agent should not use this project's core functionality on itself.
+7.  **Making assumptions about the target project's language or structure.** Always ask for clarification if the input directory's contents are ambiguous.
+
+## Scope & Focus for Gemini Agent
+When interacting with this project, the Gemini agent should primarily focus on:
+
+-   **Code Refactoring & Optimization:** Improving readability, performance, and maintainability within `node-src` and `go-src` (with Go-specific caution).
+-   **Bug Fixing:** Identifying and suggesting fixes for reported bugs in both Go and Node.js components.
+-   **New Feature Implementation (Guided):** Assisting in the implementation of new features, strictly adhering to the project's architecture and coding standards.
+-   **Code Explanation:** Explaining complex parts of the Go or Node.js codebase.
+-   **Testing:** Generating test cases or suggesting improvements to existing tests.
+-   **Documentation:** Improving the documentation within the `/docs` folder for *this* project.
+
+## Agent Persona
+You are a highly skilled and diligent full-stack developer with expertise in both Go and Node.js. You are meticulous about code quality, security, and adherence to project-specific standards. When working with Go code, exercise extreme caution and seek explicit confirmation for significant changes due to its compiled nature. Always prioritize the stability and robustness of the documentation generation process. If a task seems ambiguous or outside the defined scope, politely ask for clarification.
+</file>
+
+<file path="nest-cli.json">
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "src",
+  "compilerOptions": {
+    "deleteOutDir": true
+  }
+}
+</file>
+
+<file path="package.json">
+{
+  "name": "project-documenter",
+  "version": "0.0.1",
+  "description": "",
+  "author": "",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "nest build && nest start --watch",
+    "build": "nest build",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/main",
+    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+    "test:e2e": "jest --config ./test/jest-e2e.json"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.0.1",
+    "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/swagger": "^11.2.0",
+    "@types/glob": "^8.1.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "docx": "^9.5.1",
+    "glob": "^11.0.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "swagger-ui-express": "^5.0.1",
+    "tree-node-cli": "^1.6.0",
+    "ts-morph": "^26.0.0",
+    "typeorm": "^0.3.25"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.2.0",
+    "@eslint/js": "^9.18.0",
+    "@nestjs/cli": "^11.0.0",
+    "@nestjs/schematics": "^11.0.0",
+    "@nestjs/testing": "^11.0.1",
+    "@swc/cli": "^0.6.0",
+    "@swc/core": "^1.10.7",
+    "@types/express": "^5.0.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.7",
+    "@types/supertest": "^6.0.2",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-prettier": "^5.2.2",
+    "globals": "^16.0.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.4.2",
+    "source-map-support": "^0.5.21",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.2.5",
+    "ts-loader": "^9.5.2",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  }
+}
+</file>
+
+<file path="README.md">
+# 📝 NestJS Project Documentation Generator (with Bun)
+
+This project is a **NestJS-based API** that generates a `.docx` documentation file from a given TypeScript project folder. It uses a custom Go parser, Mermaid ERD generation, and AST parsing via `ts-morph` to analyze and document your project.
+
+---
+
+## 🚀 Features
+
+- Parse a given TypeScript backend project
+- Extract class, function, and controller information
+- Generate **Entity Relationship Diagrams (ERD)** in Mermaid format
+- Recursively resolve DTOs and type definitions
+- Output everything in a downloadable **.docx** format
+
+---
+
+## ⚙️ Requirements
+
+- [Bun](https://bun.sh/docs/installation) installed
+- [Go](https://golang.org/dl/) if using the `go-parser`
+- TypeScript backend projects to generate docs from
+
+---
+
+## 📦 Installation
+
+```bash
+bun install
+# Node-Documentor
+# Node-Documentor
+</file>
+
+<file path="tsconfig.build.json">
+{
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+}
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": false,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "noFallthroughCasesInSwitch": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}
+</file>
+
+<file path=".gemini/settings.json">
+{
+  // "model": "gemini-2.5-pro",
+  "allowedTools": [
+    "read-file",
+    "write-file",
+    "search-text"
+  ],
+  "restrictedPaths": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.git/**"
+  ]
+}
+</file>
+
+<file path="src/documentation/documentation.module.ts">
+import { Module } from '@nestjs/common';
+import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
+import { ErdGeneratorService } from '../generators/erd-generator.service';
+import { DocumentationController } from './documentation.controller';
+import { DocumentationService } from './documentation.service';
+
+@Module({
+  controllers: [DocumentationController],
+  providers: [
+    DocumentationService,
+    ErdGeneratorService,
+    MarkdownGeneratorService,
+  ],
+})
+export class DocumentationModule {}
+</file>
+
+<file path="src/generators/markdown-generator.service.ts">
+import { Injectable } from '@nestjs/common';
+import {
+  ParsedProjectData,
+  ClassInfo,
+  IdentifiedFlow,
+  SocketGatewayInfo,
+} from '../common/types';
+
+@Injectable()
+export class MarkdownGeneratorService {
+  generate(
+    projectName: string,
+    data: ParsedProjectData,
+    folderTree: string,
+    erdMermaidCode: string,
+    apiDocs: any[],
+    flows: IdentifiedFlow[],
+    webSocketInfo: SocketGatewayInfo[],
+  ): string {
+    let md = '';
+
+    // 1. Title Page
+    md += `# Project Documentation: ${projectName}
+
+`;
+    md += `**Generated on:** ${new Date().toLocaleDateString()}
+
+`;
+    md += `
+---
+
+`; // Page break in Pandoc
+
+    // 2. Table of Contents
+    md += `## Table of Contents
+
+`;
+    md += `*   [Folder Structure](#folder-structure)
+`;
+    md += `*   [Database Schema](#database-schema)
+`;
+    md += `*   [API Endpoints](#api-endpoints)
+`;
+    md += `*   [WebSocket API](#websocket-api)
+`;
+    md += `*   [Project Flows](#project-flows)
+`;
+    md += `
+---
+
+`;
+
+    // 3. Folder Structure
+    md += `## Folder Structure
+
+`;
+    md += '```\n' + folderTree + '\n```\n\n';
+    md += `
+---
+
+`;
+
+    // 4. Database Schema
+    md += `## Database Schema
+
+`;
+    md += `### Entity Relationship Diagram
+
+`;
+    md += '```mermaid\n' + erdMermaidCode + '\n```\n\n';
+    md += this.formatDatabaseTables(data.entities);
+    md += `
+---
+
+`;
+
+    // 5. API Endpoints
+    md += `## API Endpoints
+
+`;
+    md += this.formatApiDocs(apiDocs);
+    md += `
+---
+
+`;
+
+    // 6. WebSocket API
+    md += `## WebSocket API
+
+`;
+    md += this.formatWebSockets(webSocketInfo);
+    md += `
+---
+
+`;
+
+    // 7. Project Flows
+    md += `## Project Flows
+
+`;
+    md += this.formatFlows(flows);
+
+    return md;
+  }
+
+  private formatDatabaseTables(entities: ClassInfo[]): string {
+    if (!entities || entities.length === 0)
+      return 'No database entities found.\n\n';
+
+    let md = '';
+    entities.forEach((entity) => {
+      md += `### Entity: \`${entity.name}\`\n\n`;
+      md += `| Column | Type | Decorators |\n`;
+      md += `|---|---|---|\n`;
+      entity.properties?.forEach((prop) => {
+        md += `| ${prop.name || ''} | \`${prop.type || ''}\` | ${
+          prop.decorators?.join(', ') || ''
+        } |\n`;
+      });
+      md += '\n';
+    });
+    return md;
+  }
+
+  private formatApiDocs(apiDocs: any[]): string {
+    if (!apiDocs || apiDocs.length === 0) return 'No API endpoints found.\n\n';
+
+    let md = '';
+    apiDocs.forEach((doc) => {
+      md += `### \`${doc.route}\`\n\n`;
+      if (doc.description) {
+        md += `${doc.description}\n\n`;
+      }
+      if (doc.requestParams) {
+        md += `**Request:**\n\n`;
+        md +=
+          '```json\n' +
+          JSON.stringify(doc.requestParams, null, 2) +
+          '\n```\n\n';
+      }
+      if (doc.responseDto) {
+        md += `**Response:**\n\n`;
+        md +=
+          '```json\n' + JSON.stringify(doc.responseDto, null, 2) + '\n```\n\n';
+      }
+    });
+    return md;
+  }
+
+  private formatFlows(flows: IdentifiedFlow[]): string {
+    if (!flows || flows.length === 0) {
+      return 'No specific project flows were identified.\n\n';
+    }
+
+    let md = '';
+    const flowsByKeyword: Record<string, IdentifiedFlow[]> = {};
+
+    for (const flow of flows) {
+      if (!flowsByKeyword[flow.keyword]) {
+        flowsByKeyword[flow.keyword] = [];
+      }
+      flowsByKeyword[flow.keyword].push(flow);
+    }
+
+    for (const keyword in flowsByKeyword) {
+      md += `### Flow: ${keyword}\n\n`;
+      md += 'The following files appear to be related to this flow:\n\n';
+      for (const flow of flowsByKeyword[keyword]) {
+        md += `*   \`${flow.filePath}\`\n`;
+      }
+      md += '\n';
+    }
+    return md;
+  }
+
+  private formatWebSockets(gateways: SocketGatewayInfo[]): string {
+    if (!gateways || gateways.length === 0)
+      return 'No WebSocket gateways found.\n\n';
+
+    let md = '';
+    gateways.forEach((gateway) => {
+      md += `### Gateway: \`${gateway.name}\`\n\n`;
+      md += `*Source: \`${gateway.filePath}\`*\n\n`;
+
+      if (gateway.subscribedMessages.length > 0) {
+        md += `#### Subscribed Messages\n\n`;
+        md += `| Event Name | Payload Type | Ack Type |\n`;
+        md += `|---|---|---|\n`;
+        gateway.subscribedMessages.forEach((msg) => {
+          md += `| \`${msg.eventName}\` | \`${msg.payload}\` | \`${msg.ack}\` |\n`;
+        });
+        md += '\n';
+      }
+
+      if (gateway.emittedEvents.length > 0) {
+        md += `#### Emitted Events\n\n`;
+        md += `| Event Name | Payload Type |\n`;
+        md += `|---|---|\n`;
+        gateway.emittedEvents.forEach((evt) => {
+          md += `| \`${evt.eventName}\` | \`${evt.payload}\` |\n`;
+        });
+        md += '\n';
+      }
+    });
+    return md;
+  }
+}
+</file>
+
+<file path="src/scripts/flow-analyzer.util.ts">
+import { Project, SourceFile } from 'ts-morph';
+import * as path from 'path';
+import * as fs from 'fs';
+
+// Keywords to identify key business flows
+const FLOW_KEYWORDS = [
+  'auth',
+  'login',
+  'register',
+  'password',
+  'jwt',
+  'payment',
+  'checkout',
+  'subscription',
+  'charge',
+  'order',
+  'cart',
+  'product',
+  'user',
+  'profile',
+  'account',
+];
+
+interface IdentifiedFlow {
+  keyword: string;
+  filePath: string;
+  relevantCode: string; // Could be a function name, class name, etc.
+}
+
+/**
+ * Analyzes the project to identify key user and business flows.
+ * @param projectPath The absolute path to the project root.
+ * @returns An array of identified flows.
+ */
+export function analyzeProjectFlows(projectPath: string): IdentifiedFlow[] {
+  const identifiedFlows: IdentifiedFlow[] = [];
+  // Only run ts-morph if tsconfig.json exists
+  const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+  let sourceFiles: SourceFile[] = [];
+  if (fs.existsSync(tsConfigPath)) {
+    const project = new Project();
+    sourceFiles = project.addSourceFilesAtPaths(
+      path.join(projectPath, 'src/**/*.{ts,js}'),
+    );
+  }
+  // Also consider non-code files that might contain flow info
+  const otherFiles = findRelevantFiles(projectPath);
+  for (const file of [...sourceFiles, ...otherFiles]) {
+    const content =
+      typeof file === 'string'
+        ? fs.readFileSync(file, 'utf-8')
+        : file.getFullText();
+    const filePath = typeof file === 'string' ? file : file.getFilePath();
+    for (const keyword of FLOW_KEYWORDS) {
+      if (content.toLowerCase().includes(keyword)) {
+        // Basic implementation: just note the file and keyword.
+        // A more advanced version would find the specific function/class.
+        identifiedFlows.push({
+          keyword,
+          filePath: path.relative(projectPath, filePath),
+          relevantCode: `File contains keyword: ${keyword}`,
+        });
+      }
+    }
+  }
+  // Deduplicate based on file path and keyword
+  const uniqueFlows = identifiedFlows.filter(
+    (flow, index, self) =>
+      index ===
+      self.findIndex(
+        (f) => f.filePath === flow.filePath && f.keyword === flow.keyword,
+      ),
+  );
+  return uniqueFlows;
+}
+
+/**
+ * Finds non-source files that might be relevant, like configuration or markdown.
+ * @param projectPath The project path.
+ */
+function findRelevantFiles(projectPath: string): string[] {
+  const files: string[] = [];
+  const entries = fs.readdirSync(projectPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(projectPath, entry.name);
+    if (entry.isDirectory()) {
+      if (['.git', 'node_modules', 'dist', 'output'].includes(entry.name)) {
+        continue;
+      }
+      files.push(...findRelevantFiles(fullPath));
+    } else if (
+      entry.isFile() &&
+      ['.md', '.json', '.yaml', '.yml'].some((ext) => entry.name.endsWith(ext))
+    ) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+</file>
+
+<file path="src/scripts/websocket-parser.util.ts">
+import * as path from 'path';
+import * as fs from 'fs';
+import { Decorator, MethodDeclaration, Project, SyntaxKind } from 'ts-morph';
+import { SocketGatewayInfo, SocketMessageInfo } from '../common/types';
+
+export function parseWebSockets(projectPath: string): SocketGatewayInfo[] {
+  // Only run if tsconfig.json exists in the projectPath
+  const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+  if (!fs.existsSync(tsConfigPath)) {
+    // Not a TypeScript project, skip
+    return [];
+  }
+  const project = new Project({
+    tsConfigFilePath: tsConfigPath,
+    skipAddingFilesFromTsConfig: true,
+  });
+  project.addSourceFilesAtPaths(path.join(projectPath, 'src/**/*.ts'));
+
+  const gateways: SocketGatewayInfo[] = [];
+
+  const sourceFiles = project.getSourceFiles();
+
+  for (const file of sourceFiles) {
+    const gatewayClasses = file
+      .getClasses()
+      .filter((cls) =>
+        cls.getDecorators().some((d) => d.getName() === 'WebSocketGateway'),
+      );
+
+    for (const gatewayClass of gatewayClasses) {
+      const gatewayInfo: SocketGatewayInfo = {
+        name: gatewayClass.getName() ?? 'UnnamedGateway',
+        filePath: file.getFilePath(),
+        subscribedMessages: [],
+        emittedEvents: [],
+      };
+
+      const methods = gatewayClass.getMethods();
+      for (const method of methods) {
+        const subscribeDecorator = method.getDecorator('SubscribeMessage');
+        if (subscribeDecorator) {
+          gatewayInfo.subscribedMessages.push(
+            parseSubscribedMessage(method, subscribeDecorator),
+          );
+        }
+        gatewayInfo.emittedEvents.push(...parseEmittedEvents(method));
+      }
+
+      // Deduplicate emitted events
+      gatewayInfo.emittedEvents = gatewayInfo.emittedEvents.filter(
+        (event, index, self) =>
+          index === self.findIndex((e) => e.eventName === event.eventName),
+      );
+
+      gateways.push(gatewayInfo);
+    }
+  }
+
+  return gateways;
+}
+
+function parseSubscribedMessage(
+  method: MethodDeclaration,
+  decorator: Decorator,
+): SocketMessageInfo {
+  const eventName =
+    decorator.getArguments()[0]?.getText().replace(/['"]/g, '') ??
+    'unknown-event';
+
+  const bodyParam = method
+    .getParameters()
+    .find((p) => p.getDecorator('MessageBody'));
+  const payload = bodyParam ? bodyParam.getType().getText(bodyParam) : 'any';
+
+  const returnType = method.getReturnType().getText(method);
+  const ack = returnType.includes('Promise<')
+    ? returnType.replace('Promise<', '').replace('>', '')
+    : returnType;
+
+  return {
+    eventName,
+    payload,
+    ack: ack !== 'void' ? ack : 'none',
+  };
+}
+
+function parseEmittedEvents(method: MethodDeclaration): SocketMessageInfo[] {
+  const emitted: SocketMessageInfo[] = [];
+  const methodBody = method.getBody();
+
+  if (methodBody) {
+    const emitCalls = methodBody.getDescendantsOfKind(
+      SyntaxKind.CallExpression,
+    );
+    for (const call of emitCalls) {
+      const expression = call.getExpression();
+      if (expression.getText().endsWith('.emit')) {
+        const args = call.getArguments();
+        if (args.length > 0) {
+          const eventName = args[0].getText().replace(/['"]/g, '');
+          const payload = args[1] ? args[1].getType().getText(args[1]) : 'any';
+          emitted.push({ eventName, payload, ack: 'none' });
+        }
+      }
+    }
+  }
+
+  return emitted;
+}
+</file>
+
+<file path="swagger-spec.json">
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/documentation/generate": {
+      "post": {
+        "operationId": "DocumentationController_generateDocumentation",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDocumentationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "summary": "Generate a Markdown documentation file for a project folder",
+        "tags": [
+          "Documentation"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "API Documentation",
+    "description": "The API description",
+    "version": "1.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "CreateDocumentationDto": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  }
+}
+</file>
+
+<file path="parser-go/parser/parser.go">
+package parser
+
+import (
+	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"project-documenter/parser/types"
+	"regexp"
+	"strings"
+	"sync"
+)
+
+// UnifiedParser is a single, powerful parser that scans for various schema types.
+type UnifiedParser struct{}
+
+// Parse scans the project path and delegates to specialized parsers.
+func (p *UnifiedParser) Parse(projectPath string) (*types.ParsedProjectData, error) {
+	var wg sync.WaitGroup
+	resultsChan := make(chan *types.ParsedProjectData, 10)
+	errorChan := make(chan error, 10)
+
+	// This map will help prevent running the AST script multiple times for different model files in the same project.
+	astParserRun := make(map[string]bool)
+
+	err := filepath.Walk(projectPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			if info.Name() == "node_modules" || info.Name() == ".git" || info.Name() == "dist" || info.Name() == "output" {
+				return filepath.SkipDir
+			}
+			return nil // It's a directory, just continue.
+		}
+
+		// --- Strategy 1: Prisma Schema ---
+		if info.Name() == "schema.prisma" {
+			wg.Add(1)
+			go func(filePath string) {
+				defer wg.Done()
+				if data, err := parsePrismaSchema(filePath); err != nil {
+					errorChan <- fmt.Errorf("failed to parse prisma schema %s: %w", filePath, err)
+				} else if data != nil {
+					resultsChan <- data
+				}
+			}(path)
+		}
+
+		// --- Strategy 2: SQL DDL Files ---
+		if strings.HasSuffix(info.Name(), ".sql") {
+			wg.Add(1)
+			go func(filePath string) {
+				defer wg.Done()
+				if data, err := parseSQLFile(filePath); err != nil {
+					errorChan <- fmt.Errorf("failed to parse SQL file %s: %w", filePath, err)
+				} else if data != nil {
+					resultsChan <- data
+				}
+			}(path)
+		}
+
+		// --- Strategy 3: Mongoose/TypeORM Schemas (via AST parser script) ---
+		// We only run this once per project.
+		if (strings.HasSuffix(info.Name(), ".model.ts") || strings.HasSuffix(info.Name(), ".schema.ts") || strings.HasSuffix(info.Name(), ".entity.ts")) && !astParserRun[projectPath] {
+			astParserRun[projectPath] = true // Mark as run
+			wg.Add(1)
+			go func(pPath string) {
+				defer wg.Done()
+				if data, err := parseWithASTScript(pPath); err != nil {
+					errorChan <- fmt.Errorf("failed to parse TS project with AST script: %w", err)
+				} else if data != nil {
+					resultsChan <- data
+				}
+			}(projectPath)
+		}
+
+		// --- Strategy 4: Go AST Parsing ---
+		if strings.HasSuffix(info.Name(), ".go") {
+			wg.Add(1)
+			go func(filePath string) {
+				defer wg.Done()
+				if data, err := parseGoSourceFile(filePath); err != nil {
+					errorChan <- fmt.Errorf("failed to parse Go source file %s: %w", filePath, err)
+				} else if data != nil {
+					resultsChan <- data
+				}
+			}(path)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error walking project directory: %w", err)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+		close(errorChan)
+	}()
+
+	finalData := &types.ParsedProjectData{
+		Entities:      []types.ClassInfo{},
+		Classes:       []types.ClassInfo{},
+		Functions:     []types.APIFunctionInfo{},
+		Relationships: []types.RelationshipInfo{},
+	}
+
+	for data := range resultsChan {
+		finalData.Entities = append(finalData.Entities, data.Entities...)
+		finalData.Classes = append(finalData.Classes, data.Classes...)
+		finalData.Functions = append(finalData.Functions, data.Functions...)
+		finalData.Relationships = append(finalData.Relationships, data.Relationships...)
+	}
+
+	for err := range errorChan {
+		fmt.Fprintf(os.Stderr, "Parser error: %v\n", err)
+	}
+
+	return finalData, nil
+}
+
+// --- Sub-Parsers ---
+
+func parsePrismaSchema(filePath string) (*types.ParsedProjectData, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read prisma schema file: %w", err)
+	}
+
+	schemaContent := string(content)
+
+	// Regex to find all model blocks
+	modelRegex := regexp.MustCompile(`(?s)model\s+(\w+)\s*\{([^}]+)\}`)
+
+	// Regex to parse fields within a model
+	fieldRegex := regexp.MustCompile(`^\s*(\w+)\s+([\w\[\]]+)\s*(@.*)?$`)
+
+	// Regex to parse relationships from relation attributes
+	relationRegex := regexp.MustCompile(`@relation\s*\(\s*fields:\s*\[([^\]]+)\]\,\s*references:\s*\[([^\]]+)\]`)
+
+	entities := []types.ClassInfo{}
+	relationships := []types.RelationshipInfo{}
+
+	modelMatches := modelRegex.FindAllStringSubmatch(schemaContent, -1)
+	if modelMatches == nil {
+		return nil, nil // No models found, not an error
+	}
+
+	for _, modelMatch := range modelMatches {
+		modelName := modelMatch[1]
+		modelBody := modelMatch[2]
+
+		entity := types.ClassInfo{
+			Name:       modelName,
+			Properties: []types.PropertyInfo{},
+		}
+
+		lines := strings.Split(modelBody, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "//") {
+				continue
+			}
+
+			fieldMatch := fieldRegex.FindStringSubmatch(line)
+			if fieldMatch != nil {
+				propName := fieldMatch[1]
+				propType := fieldMatch[2]
+				attributes := fieldMatch[3]
+
+				prop := types.PropertyInfo{
+					Name: propName,
+					Type: propType,
+					// Modifiers can be parsed from attributes if needed
+				}
+				entity.Properties = append(entity.Properties, prop)
+
+				// Check for relationships
+				if strings.Contains(attributes, "@relation") {
+					// This is a simplified relationship detection.
+					// A more robust implementation would parse the full @relation attribute.
+
+					// Try to find the related model type
+					relatedModelType := propType
+					if strings.HasSuffix(relatedModelType, "[]") {
+						relatedModelType = strings.TrimSuffix(relatedModelType, "[]")
+					}
+
+					// Heuristic to determine relationship type
+					relType := "OneToOne"
+					if strings.HasSuffix(propType, "[]") {
+						relType = "OneToMany"
+					} else if !strings.Contains(attributes, "@unique") {
+						// If the foreign key field is not unique, it's likely a ManyToOne
+						relationAttrMatch := relationRegex.FindStringSubmatch(attributes)
+						if relationAttrMatch != nil {
+							relType = "ManyToOne"
+						}
+					}
+
+					relationships = append(relationships, types.RelationshipInfo{
+						From: modelName,
+						To:   relatedModelType,
+						Type: relType,
+					})
+				}
+			}
+		}
+		entities = append(entities, entity)
+	}
+
+	return &types.ParsedProjectData{
+		Entities:      entities,
+		Relationships: relationships,
+		// Classes and Functions are empty as they are not parsed from prisma schema
+		Classes:   []types.ClassInfo{},
+		Functions: []types.APIFunctionInfo{},
+	}, nil
+}
+
+func parseSQLFile(filePath string) (*types.ParsedProjectData, error) {
+	// Placeholder - a real implementation would parse DDL into types.ParsedProjectData
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if strings.Contains(strings.ToLower(string(content)), "create table") {
+		fmt.Fprintf(os.Stderr, "Found 'CREATE TABLE' in: %s\n", filePath)
+	}
+	return nil, nil
+}
+
+func parseWithASTScript(projectPath string) (*types.ParsedProjectData, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve parser executable path: %w", err)
+	}
+	parserDir := filepath.Dir(exePath)
+	projectRoot := filepath.Join(parserDir, "..")
+	scriptPath := filepath.Join(projectRoot, "src", "scripts", "interface-parser.ts")
+
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("AST parser script not found at %s", scriptPath)
+	}
+
+	cmd := exec.Command("npx", "ts-node", scriptPath)
+	cmd.Dir = projectPath
+	cmd.Env = append(os.Environ(), "TS_NODE_TRANSPILE_ONLY=true")
+
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("ts-node script execution failed: %w. Stderr: %s", err, string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("ts-node script execution failed: %w", err)
+	}
+
+	var parsed types.ParsedProjectData
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse AST output: %w. Output: %s", err, string(output))
+	}
+
+	return &parsed, nil
+}
+
+func parseGoSourceFile(filePath string) (*types.ParsedProjectData, error) {
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+	if err != nil {
+		return nil, err
+	}
+
+	entities := []types.ClassInfo{}
+	functions := []types.APIFunctionInfo{}
+	relationships := []types.RelationshipInfo{}
+
+	structNames := make(map[string]bool)
+
+	// Extract structs (entities)
+	for _, decl := range node.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			structType, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			structNames[typeSpec.Name.Name] = true
+			entity := types.ClassInfo{
+				Name:       typeSpec.Name.Name,
+				FilePath:   filePath,
+				Docs:       "", // Optionally extract doc comments
+				Methods:    []types.MethodInfo{},
+				Properties: []types.PropertyInfo{},
+			}
+			for _, field := range structType.Fields.List {
+				fieldType := ""
+				if ident, ok := field.Type.(*ast.Ident); ok {
+					fieldType = ident.Name
+				}
+				if arrType, ok := field.Type.(*ast.ArrayType); ok {
+					if ident, ok := arrType.Elt.(*ast.Ident); ok {
+						fieldType = "[]" + ident.Name
+					}
+				}
+				for _, name := range field.Names {
+					entity.Properties = append(entity.Properties, types.PropertyInfo{
+						Name:       name.Name,
+						Type:       fieldType,
+						Decorators: []string{}, // Optionally parse struct tags
+					})
+				}
+			}
+			entities = append(entities, entity)
+		}
+	}
+
+	// Extract REST handlers (functions with http.ResponseWriter, *http.Request)
+	for _, decl := range node.Decls {
+		funcDecl, ok := decl.(*ast.FuncDecl)
+		if !ok || funcDecl.Recv != nil {
+			continue // Only top-level functions
+		}
+		if funcDecl.Type.Params != nil && len(funcDecl.Type.Params.List) == 2 {
+			// Check for (w http.ResponseWriter, r *http.Request)
+			functions = append(functions, types.APIFunctionInfo{
+				Name:       funcDecl.Name.Name,
+				Method:     "UNKNOWN", // Could try to infer from comments or router setup
+				Route:      "",
+				Docs:       "",
+				ReturnType: "",
+			})
+		}
+	}
+
+	// Relationship extraction: for each struct, check if any field type matches another struct
+	for _, entity := range entities {
+		for _, prop := range entity.Properties {
+			// OneToMany: slice of another struct
+			if strings.HasPrefix(prop.Type, "[]") {
+				target := strings.TrimPrefix(prop.Type, "[]")
+				if structNames[target] {
+					relationships = append(relationships, types.RelationshipInfo{
+						From: entity.Name,
+						To:   target,
+						Type: "OneToMany",
+					})
+				}
+			} else if structNames[prop.Type] {
+				// OneToOne: direct field of another struct
+				relationships = append(relationships, types.RelationshipInfo{
+					From: entity.Name,
+					To:   prop.Type,
+					Type: "OneToOne",
+				})
+			}
+		}
+	}
+
+	return &types.ParsedProjectData{
+		Entities:      entities,
+		Classes:       entities,
+		Functions:     functions,
+		Relationships: relationships,
+	}, nil
+}
+</file>
+
+<file path="parser-go/main.go">
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"project-documenter/parser/parser"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		log.Fatal("Missing project path")
+	}
+	projectPath, err := filepath.Abs(os.Args[1])
+	if err != nil {
+		log.Fatalf("Failed to get absolute path: %v", err)
+	}
+
+	// The new, single, unified parser
+	p := &parser.UnifiedParser{}
+
+	data, err := p.Parse(projectPath)
+	if err != nil {
+		log.Fatalf("Parsing failed: %v", err)
+	}
+
+	jsonOut, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal JSON: %v", err)
+	}
+
+	fmt.Println(string(jsonOut))
+}
+</file>
+
+<file path="src/common/types.ts">
+// src/common/types.ts
+
+export interface MethodInfo {
+  name: string;
+  docs: string; // Contains signature, inputs, outputs
+}
+
+export interface PropertyInfo {
+  name: string;
+  type: string;
+  decorators: string[];
+}
+
+export interface ClassInfo {
+  name: string | undefined;
+  filePath: string;
+  docs: string;
+  methods: MethodInfo[];
+  properties: PropertyInfo[];
+}
+
+export interface FunctionInfo {
+  name: string;
+  method: string; // e.g., GET, POST
+  route: string; // e.g., /users/:id
+  docs: string; // e.g., Input: (...), Output: ...
+  returnType: string;
+}
+
+// The complete parsed data from any analyzer
+export interface ParsedProjectData {
+  entities: ClassInfo[];
+  classes: ClassInfo[];
+  functions: FunctionInfo[];
+  relationships?: EntityRelationship[]; // ✅ Optional support
+}
+
+// Data needed to build the ERD
+export interface EntityRelationship {
+  from: string;
+  to: string;
+  type: 'OneToOne' | 'OneToMany' | 'ManyToOne' | 'ManyToMany';
+}
+
+export interface IdentifiedFlow {
+  keyword: string;
+  filePath: string;
+  relevantCode: string;
+}
+
+// --- WebSocket Types ---
+
+export interface SocketMessageInfo {
+  eventName: string;
+  payload: string;
+  ack: string;
+}
+
+export interface SocketGatewayInfo {
+  name: string;
+  filePath: string;
+  subscribedMessages: SocketMessageInfo[];
+  emittedEvents: SocketMessageInfo[];
+}
+</file>
+
+<file path="src/documentation/documentation.controller.ts">
+import { Controller, Post, Body, Res, HttpStatus } from '@nestjs/common';
+import { Response } from 'express';
+import { DocumentationService } from './documentation.service';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { CreateDocumentationDto } from 'src/dtos/create-documentation.dto';
+
+@ApiTags('Documentation')
+@Controller('documentation')
+export class DocumentationController {
+  constructor(private readonly documentationService: DocumentationService) {}
+
+  @Post('generate')
+  @ApiOperation({
+    summary: 'Generate a Markdown documentation file for a project folder',
+  })
+  async generateDocumentation(
+    @Body() createDocumentationDto: CreateDocumentationDto,
+    @Res() res: Response,
+  ) {
+    try {
+      const buffer = await this.documentationService.generateDocumentation(
+        createDocumentationDto.projectPath,
+      );
+
+      res.setHeader('Content-Type', 'text/markdown');
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename=documentation.md',
+      );
+      res.status(HttpStatus.OK).send(buffer);
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'An unknown error occurred';
+      res
+        .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        .json({ message: 'Failed to generate document', error: errorMessage });
+    }
+  }
+}
+</file>
+
+<file path="src/scripts/api-parser.util.ts">
+import * as path from 'path';
+import { Node, Project, SyntaxKind, Type } from 'ts-morph';
+import * as fs from 'fs';
+
+const IGNORED_TYPES = new Set([
+  'Blob',
+  'Promise',
+  'Date',
+  'File',
+  'Response',
+  'Request',
+  'ParamsDictionary',
+  'StreamableFile',
+]);
+
+export function generateApiDoc(projectPath: string): any[] {
+  // Only run if tsconfig.json exists in the projectPath
+  const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+  if (!fs.existsSync(tsConfigPath)) {
+    // Not a TypeScript project, skip
+    return [];
+  }
+  const project = new Project({
+    tsConfigFilePath: tsConfigPath,
+    skipAddingFilesFromTsConfig: false,
+  });
+
+  // ✅ Force load DTOs
+  project.addSourceFilesAtPaths(path.join(projectPath, 'src/**/*.ts'));
+
+  const sourceFiles = project.getSourceFiles(
+    path.join(projectPath, 'src/**/*.ts'),
+  );
+
+  const httpMethods = ['Get', 'Post', 'Put', 'Delete', 'Patch'];
+  const controllers: any[] = [];
+
+  sourceFiles.forEach((file) => {
+    const controllerClass = file
+      .getClasses()
+      .find((cls) =>
+        cls.getDecorators().some((d) => d.getName() === 'Controller'),
+      );
+    if (!controllerClass) return;
+
+    const baseRoute =
+      controllerClass
+        .getDecorator('Controller')
+        ?.getArguments()[0]
+        ?.getText()
+        ?.replace(/['"]/g, '') || '';
+
+    controllerClass.getMethods().forEach((method) => {
+      const routeDecorator = method
+        .getDecorators()
+        .find((d) => httpMethods.includes(d.getName()));
+      if (!routeDecorator) return;
+
+      const httpMethod = routeDecorator.getName().toUpperCase();
+      const route =
+        routeDecorator.getArguments()[0]?.getText().replace(/['"]/g, '') || '';
+
+      const fullRoute = `${httpMethod} ${baseRoute}${route.startsWith('/') ? '' : '/'}${route}`;
+      const methodName = method.getName();
+
+      const requestParams: Record<string, any> = {};
+
+      method.getParameters().forEach((param) => {
+        const decorator = param.getDecorators()[0];
+        if (!decorator) return;
+
+        const decoratorName = decorator.getName(); // Body, Param, Query, etc.
+        const type = param.getType();
+        const resolved = extractTypeFieldsByType(
+          project,
+          type,
+          new Set<string>(),
+          projectPath,
+        );
+
+        if (resolved) {
+          requestParams[decoratorName.toLowerCase()] = resolved;
+        } else {
+          requestParams[decoratorName.toLowerCase()] = {
+            name: param.getName(),
+            type: type.getText(),
+          };
+        }
+      });
+
+      const returnType = method.getReturnType();
+      const unwrapped = returnType.getTypeArguments()?.[0] || returnType;
+      const responseDto = extractTypeFieldsByType(
+        project,
+        unwrapped,
+        new Set<string>(),
+        projectPath,
+      );
+
+      controllers.push({
+        controller: controllerClass.getName(),
+        route: fullRoute,
+        methodName,
+        requestParams,
+        responseDto,
+      });
+    });
+  });
+
+  return controllers;
+}
+
+function extractTypeFieldsByType(
+  project: Project,
+  type: Type,
+  visitedTypes = new Set<string>(),
+  projectPath: string,
+): any | null {
+  const typeText = type.getText();
+  const symbol = type.getSymbol();
+  const typeName = symbol?.getName() ?? typeText;
+
+  if (IGNORED_TYPES.has(typeName)) {
+    return null;
+  }
+
+  const enumDecl = symbol?.getDeclarations()?.[0];
+  if (enumDecl?.getKind() === SyntaxKind.EnumDeclaration) {
+    const members = (enumDecl as any)
+      .getMembers?.()
+      .map((m: any) => m.getName());
+    return {
+      name: typeName,
+      type: 'enum',
+      values: members,
+    };
+  }
+
+  if (visitedTypes.has(typeText)) {
+    return { name: typeName, fields: '[Circular Reference]' };
+  }
+
+  visitedTypes.add(typeText);
+
+  if (
+    type.isStringLiteral() ||
+    type.isNumberLiteral() ||
+    type.isBooleanLiteral()
+  ) {
+    return { name: typeText, type: 'literal', value: typeText };
+  }
+
+  if (type.getSymbol()?.getName() === 'Date') {
+    return { name: 'Date', type: 'primitive' };
+  }
+
+  if (['any', 'unknown', '{}'].includes(typeText.trim())) {
+    return { name: typeText, type: 'primitive' };
+  }
+
+  if (
+    type.isString() ||
+    type.isNumber() ||
+    type.isBoolean() ||
+    type.isUndefined() ||
+    type.isNull() ||
+    type.isVoid() ||
+    type.getSymbol()?.getName() === 'File' ||
+    type.getText().includes('Express.') ||
+    type.getText().startsWith('import("node:')
+  ) {
+    return null;
+  }
+
+  if (type.isUnion()) {
+    const unionType = type.getUnionTypes().find((t) => t.getSymbol());
+    return unionType
+      ? extractTypeFieldsByType(project, unionType, visitedTypes, projectPath)
+      : null;
+  }
+
+  if (type.isArray()) {
+    const elem = type.getArrayElementTypeOrThrow();
+    const sub = extractTypeFieldsByType(
+      project,
+      elem,
+      visitedTypes,
+      projectPath,
+    );
+    return sub ? { ...sub, isArray: true } : null;
+  }
+
+  if (type.getTypeArguments().length > 0) {
+    const inner = type.getTypeArguments()[0];
+    return extractTypeFieldsByType(project, inner, visitedTypes, projectPath);
+  }
+
+  if (
+    type.getText().startsWith('{') &&
+    type.isObject() &&
+    type.getProperties().length > 0
+  ) {
+    const fields: Record<string, any> = {};
+    for (const prop of type.getProperties()) {
+      const propDecl = prop.getValueDeclaration();
+      if (!propDecl) continue;
+      const propType = propDecl.getType();
+      const resolved = extractTypeFieldsByType(
+        project,
+        propType,
+        visitedTypes,
+        projectPath,
+      );
+      fields[prop.getName()] = resolved?.fields ? resolved : propType.getText();
+    }
+
+    return {
+      name: typeName,
+      type: 'inlineObject',
+      fields,
+    };
+  }
+
+  const declaration = symbol?.getDeclarations()?.[0];
+  let classDecl;
+
+  if (
+    declaration &&
+    (Node.isClassDeclaration(declaration) ||
+      Node.isInterfaceDeclaration(declaration))
+  ) {
+    classDecl = declaration;
+  }
+
+  // If no direct declaration, it might be an alias from an import.
+  // Follow the alias to the original declaration.
+  if (!classDecl) {
+    const aliasedSymbol = symbol?.getAliasedSymbol();
+    if (aliasedSymbol) {
+      const originalDeclarations = aliasedSymbol.getDeclarations();
+      for (const decl of originalDeclarations) {
+        if (
+          Node.isClassDeclaration(decl) ||
+          Node.isInterfaceDeclaration(decl)
+        ) {
+          classDecl = decl;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!classDecl) {
+    // This is a soft failure now, we just won't document this DTO fully.
+    return { name: typeName, type: 'unresolved' };
+  }
+
+  const fields: Record<string, any> = {};
+  classDecl.getProperties().forEach((prop) => {
+    const name = prop.getName();
+    const propType = prop.getType();
+    const nested = extractTypeFieldsByType(
+      project,
+      propType,
+      new Set(visitedTypes),
+      projectPath,
+    );
+
+    fields[name] = nested?.fields ? nested : propType.getText();
+  });
+
+  return {
+    name: classDecl.getName() || typeText,
+    fields,
+  };
+}
+</file>
+
+<file path="src/scripts/interface-parser.ts">
+import * as path from 'path';
+import { ClassDeclaration, Node, Project, Type } from 'ts-morph';
+import { ClassInfo, EntityRelationship, PropertyInfo } from '../common/types';
+import * as fs from 'fs';
+
+// --- Configuration ---
+const ENTITY_DECORATORS = ['Entity', 'Schema'];
+const RELATIONSHIP_DECORATORS = [
+  'OneToOne',
+  'OneToMany',
+  'ManyToOne',
+  'ManyToMany',
+];
+
+// --- Main Logic ---
+
+function main() {
+  // Only run if tsconfig.json exists in the current working directory
+  const tsConfigPath = path.join(process.cwd(), 'tsconfig.json');
+  if (!fs.existsSync(tsConfigPath)) {
+    // Not a TypeScript project, skip
+    console.log(JSON.stringify({ entities: [], relationships: [] }, null, 2));
+    return;
+  }
+  const project = new Project({
+    tsConfigFilePath: tsConfigPath,
+    skipAddingFilesFromTsConfig: true, // We will add files manually
+  });
+  project.addSourceFilesAtPaths('src/**/*.ts');
+
+  const entities: ClassInfo[] = [];
+  const relationships: EntityRelationship[] = [];
+
+  const sourceFiles = project.getSourceFiles();
+
+  for (const file of sourceFiles) {
+    const classes = file.getClasses();
+    for (const classDeclaration of classes) {
+      const entityDecorator = classDeclaration
+        .getDecorators()
+        .find((d) => ENTITY_DECORATORS.includes(d.getName()));
+
+      if (entityDecorator) {
+        const entityInfo = parseEntity(classDeclaration);
+        entities.push(entityInfo);
+
+        const entityRelationships = parseRelationships(classDeclaration);
+        relationships.push(...entityRelationships);
+      }
+    }
+  }
+
+  console.log(JSON.stringify({ entities, relationships }, null, 2));
+}
+
+// --- Parsers ---
+
+function parseEntity(classDeclaration: ClassDeclaration): ClassInfo {
+  const properties: PropertyInfo[] = classDeclaration
+    .getProperties()
+    .map((prop) => {
+      return {
+        name: prop.getName(),
+        type: prop.getType().getText(prop),
+        decorators: prop.getDecorators().map((d) => d.getText()),
+      };
+    });
+
+  return {
+    name: classDeclaration.getName(),
+    filePath: classDeclaration.getSourceFile().getFilePath(),
+    docs: 'Parsed from TypeScript class decorator',
+    methods: [], // Method parsing can be added here if needed
+    properties,
+  };
+}
+
+function parseRelationships(
+  classDeclaration: ClassDeclaration,
+): EntityRelationship[] {
+  const relationships: EntityRelationship[] = [];
+  const sourceEntityName = classDeclaration.getName() ?? 'UnknownEntity';
+
+  for (const prop of classDeclaration.getProperties()) {
+    // --- Strategy 1: Decorator-based relationships (TypeORM, etc.) ---
+    const relDecorator = prop
+      .getDecorators()
+      .find((d) => RELATIONSHIP_DECORATORS.includes(d.getName()));
+
+    if (relDecorator) {
+      const relationshipType =
+        relDecorator.getName() as EntityRelationship['type'];
+      const typeArg = relDecorator.getArguments()[0];
+      if (!typeArg) continue;
+
+      let targetEntityType: Type | undefined;
+      if (Node.isArrowFunction(typeArg)) {
+        targetEntityType = typeArg.getReturnType();
+      } else {
+        targetEntityType = typeArg.getType();
+      }
+
+      if (!targetEntityType) continue;
+
+      const targetEntityName =
+        targetEntityType.getSymbol()?.getName() ?? 'UnknownTarget';
+
+      relationships.push({
+        from: sourceEntityName,
+        to: targetEntityName,
+        type: relationshipType,
+      });
+      continue;
+    }
+
+    // --- Strategy 2: @Prop with `ref` (Mongoose) ---
+    const propDecorator = prop.getDecorator('Prop');
+    if (propDecorator) {
+      const propArgs = propDecorator.getArguments()[0];
+      if (propArgs && Node.isObjectLiteralExpression(propArgs)) {
+        const refProperty = propArgs.getProperty('ref');
+        if (refProperty && Node.isPropertyAssignment(refProperty)) {
+          const refInitializer = refProperty.getInitializer();
+          if (refInitializer) {
+            // Handle both string literal refs and identifier refs (e.g., ref: 'User' or ref: User.name)
+            let targetEntityName = '';
+            if (Node.isStringLiteral(refInitializer)) {
+              targetEntityName = refInitializer.getLiteralText();
+            } else if (Node.isPropertyAccessExpression(refInitializer)) {
+              targetEntityName = refInitializer.getExpression().getText();
+            } else {
+              targetEntityName = refInitializer.getText();
+            }
+
+            const isArray = prop.getType().isArray();
+            const relationshipType = isArray ? 'OneToMany' : 'ManyToOne';
+
+            relationships.push({
+              from: sourceEntityName,
+              to: targetEntityName,
+              type: relationshipType,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return relationships;
+}
+
+// --- Execution ---
+
+try {
+  main();
+} catch (error) {
+  console.error('Failed to parse project:', error);
+  process.exit(1);
+}
+</file>
+
+<file path="src/documentation/documentation.service.ts">
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { execFile } from 'child_process';
+import * as fs from 'fs';
+import * as glob from 'glob';
+import * as path from 'path';
+import { generateApiDoc } from 'src/scripts/api-parser.util';
+import { analyzeProjectFlows } from 'src/scripts/flow-analyzer.util';
+import { generatePythonApiDoc } from 'src/scripts/python-api-parser.util';
+import { parseWebSockets } from 'src/scripts/websocket-parser.util';
+import tree from 'tree-node-cli';
+import {
+  ParsedProjectData,
+  IdentifiedFlow,
+  SocketGatewayInfo,
+} from '../common/types';
+import { ErdGeneratorService } from '../generators/erd-generator.service';
+import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
+
+@Injectable()
+export class DocumentationService {
+  private readonly goParserExecutablePath: string;
+
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly erdGenerator: ErdGeneratorService,
+    private readonly markdownGenerator: MarkdownGeneratorService, // Changed
+  ) {
+    const relativePath = this.configService.get<string>(
+      'GO_PARSER_PATH',
+      './parser-go/go-parser',
+    );
+    this.goParserExecutablePath = path.resolve(process.cwd(), relativePath);
+  }
+
+  public async generateDocumentation(projectPath: string): Promise<Buffer> {
+    if (!fs.existsSync(projectPath)) {
+      throw new NotFoundException(`Project path not found: ${projectPath}`);
+    }
+
+    const parsedData = await this.runGoParser(projectPath);
+    let apiDocs = this.findAndParseApiSpec(projectPath);
+
+    if (!apiDocs) {
+      if (this.isTypeScriptProject(projectPath)) {
+        try {
+          apiDocs = generateApiDoc(projectPath);
+        } catch (e) {
+          console.error('Failed to generate API docs from source:', e);
+          apiDocs = [];
+        }
+      } else if (await this.isPythonProject(projectPath)) {
+        try {
+          apiDocs = generatePythonApiDoc(projectPath); // Call the new placeholder function
+          console.log(
+            'Python project detected. Attempting Python API doc generation.',
+          );
+          // TODO: Add database model/entity extraction for Python (Django ORM, SQLAlchemy, etc.)
+          // Example: parsedData.entities = extractPythonEntities(projectPath);
+          // Example: parsedData.relationships = extractPythonRelationships(projectPath);
+        } catch (e) {
+          console.error('Failed to generate API docs from source (Python):', e);
+          apiDocs = [];
+        }
+      } else {
+        console.log(
+          'Skipping API doc generation from source: Not a TypeScript project.',
+        );
+        apiDocs = [];
+      }
+    }
+
+    const folderTree = tree(projectPath, {
+      exclude: [/node_modules/, /dist/, /\.git/, /output/],
+    });
+
+    const projectName = path.basename(projectPath);
+    const outputDir = path.resolve(process.cwd(), 'output', projectName);
+    await fs.promises.mkdir(outputDir, { recursive: true });
+
+    const erdMermaidCode = await this.erdGenerator.generateMermaidCodeOnly(
+      parsedData.relationships ?? [],
+      outputDir,
+    );
+
+    // Only analyze flows and sockets for TypeScript projects
+    let flows: IdentifiedFlow[] = [];
+    let webSocketInfo: SocketGatewayInfo[] = [];
+    if (this.isTypeScriptProject(projectPath)) {
+      flows = analyzeProjectFlows(projectPath);
+      webSocketInfo = parseWebSockets(projectPath);
+    }
+
+    // Generate Markdown content
+    const markdownContent = this.markdownGenerator.generate(
+      projectName,
+      parsedData,
+      folderTree,
+      erdMermaidCode,
+      apiDocs,
+      flows,
+      webSocketInfo,
+    );
+
+    // Save the Markdown file
+    const filePath = path.join(outputDir, `${projectName}-documentation.md`);
+    await fs.promises.writeFile(filePath, markdownContent);
+
+    // Return the markdown content as a buffer
+    return Buffer.from(markdownContent, 'utf-8');
+  }
+
+  private findAndParseApiSpec(projectPath: string): any[] | null {
+    const specFileNames = ['swagger-spec.json', 'openapi.json', 'swagger.json'];
+    for (const fileName of specFileNames) {
+      const filePath = path.join(projectPath, fileName);
+      if (fs.existsSync(filePath)) {
+        try {
+          const fileContent = fs.readFileSync(filePath, 'utf-8');
+          return JSON.parse(fileContent); // Return the raw spec
+        } catch (e) {
+          console.error(`Error parsing API spec file ${fileName}:`, e);
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  private runGoParser(projectPath: string): Promise<ParsedProjectData> {
+    return new Promise((resolve, reject) => {
+      const executablePath = this.goParserExecutablePath;
+      if (!fs.existsSync(executablePath)) {
+        const errorMsg = `Go parser executable not found: ${executablePath}`;
+        return reject(new InternalServerErrorException(errorMsg));
+      }
+
+      execFile(
+        executablePath,
+        [projectPath],
+        { maxBuffer: 1024 * 1024 * 50 },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.error(`Go Parser Error: ${stderr}`);
+            return reject(
+              new InternalServerErrorException('Go parser failed.'),
+            );
+          }
+          try {
+            const parsedJson: ParsedProjectData = JSON.parse(stdout);
+            resolve(parsedJson);
+          } catch (err) {
+            console.error(`JSON parsing error: ${err}. STDOUT: ${stdout}`);
+            reject(
+              new InternalServerErrorException(
+                'Failed to parse Go parser output.',
+              ),
+            );
+          }
+        },
+      );
+    });
+  }
+
+  private isTypeScriptProject(projectPath: string): boolean {
+    const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+    return fs.existsSync(tsConfigPath);
+  }
+
+  private async isPythonProject(projectPath: string): Promise<boolean> {
+    const pythonFiles = await glob.glob(path.join(projectPath, '**/*.py'), {
+      ignore: ['**/node_modules/**', '**/dist/**', '**/venv/**'],
+    });
+    const hasRequirementsTxt = fs.existsSync(
+      path.join(projectPath, 'requirements.txt'),
+    );
+    const hasPyprojectToml = fs.existsSync(
+      path.join(projectPath, 'pyproject.toml'),
+    );
+    return pythonFiles.length > 0 || hasRequirementsTxt || hasPyprojectToml;
+  }
+}
+</file>
+
+</files>
