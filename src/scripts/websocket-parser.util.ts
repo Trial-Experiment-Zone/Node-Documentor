@@ -1,10 +1,17 @@
-import { Project, ClassDeclaration, MethodDeclaration, Decorator, SyntaxKind } from 'ts-morph';
 import * as path from 'path';
+import * as fs from 'fs';
+import { Decorator, MethodDeclaration, Project, SyntaxKind } from 'ts-morph';
 import { SocketGatewayInfo, SocketMessageInfo } from '../common/types';
 
 export function parseWebSockets(projectPath: string): SocketGatewayInfo[] {
+  // Only run if tsconfig.json exists in the projectPath
+  const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+  if (!fs.existsSync(tsConfigPath)) {
+    // Not a TypeScript project, skip
+    return [];
+  }
   const project = new Project({
-    tsConfigFilePath: path.join(projectPath, 'tsconfig.json'),
+    tsConfigFilePath: tsConfigPath,
     skipAddingFilesFromTsConfig: true,
   });
   project.addSourceFilesAtPaths(path.join(projectPath, 'src/**/*.ts'));
@@ -14,9 +21,11 @@ export function parseWebSockets(projectPath: string): SocketGatewayInfo[] {
   const sourceFiles = project.getSourceFiles();
 
   for (const file of sourceFiles) {
-    const gatewayClasses = file.getClasses().filter(cls => 
-      cls.getDecorators().some(d => d.getName() === 'WebSocketGateway')
-    );
+    const gatewayClasses = file
+      .getClasses()
+      .filter((cls) =>
+        cls.getDecorators().some((d) => d.getName() === 'WebSocketGateway'),
+      );
 
     for (const gatewayClass of gatewayClasses) {
       const gatewayInfo: SocketGatewayInfo = {
@@ -30,14 +39,17 @@ export function parseWebSockets(projectPath: string): SocketGatewayInfo[] {
       for (const method of methods) {
         const subscribeDecorator = method.getDecorator('SubscribeMessage');
         if (subscribeDecorator) {
-          gatewayInfo.subscribedMessages.push(parseSubscribedMessage(method, subscribeDecorator));
+          gatewayInfo.subscribedMessages.push(
+            parseSubscribedMessage(method, subscribeDecorator),
+          );
         }
         gatewayInfo.emittedEvents.push(...parseEmittedEvents(method));
       }
-      
+
       // Deduplicate emitted events
-      gatewayInfo.emittedEvents = gatewayInfo.emittedEvents.filter((event, index, self) =>
-        index === self.findIndex((e) => e.eventName === event.eventName)
+      gatewayInfo.emittedEvents = gatewayInfo.emittedEvents.filter(
+        (event, index, self) =>
+          index === self.findIndex((e) => e.eventName === event.eventName),
       );
 
       gateways.push(gatewayInfo);
@@ -47,15 +59,22 @@ export function parseWebSockets(projectPath: string): SocketGatewayInfo[] {
   return gateways;
 }
 
-function parseSubscribedMessage(method: MethodDeclaration, decorator: Decorator): SocketMessageInfo {
-  const eventName = decorator.getArguments()[0]?.getText().replace(/['"]/g, '') ?? 'unknown-event';
-  
-  const bodyParam = method.getParameters().find(p => p.getDecorator('MessageBody'));
+function parseSubscribedMessage(
+  method: MethodDeclaration,
+  decorator: Decorator,
+): SocketMessageInfo {
+  const eventName =
+    decorator.getArguments()[0]?.getText().replace(/['"]/g, '') ??
+    'unknown-event';
+
+  const bodyParam = method
+    .getParameters()
+    .find((p) => p.getDecorator('MessageBody'));
   const payload = bodyParam ? bodyParam.getType().getText(bodyParam) : 'any';
-  
+
   const returnType = method.getReturnType().getText(method);
-  const ack = returnType.includes('Promise<') 
-    ? returnType.replace('Promise<', '').replace('>', '') 
+  const ack = returnType.includes('Promise<')
+    ? returnType.replace('Promise<', '').replace('>', '')
     : returnType;
 
   return {
@@ -70,7 +89,9 @@ function parseEmittedEvents(method: MethodDeclaration): SocketMessageInfo[] {
   const methodBody = method.getBody();
 
   if (methodBody) {
-    const emitCalls = methodBody.getDescendantsOfKind(SyntaxKind.CallExpression);
+    const emitCalls = methodBody.getDescendantsOfKind(
+      SyntaxKind.CallExpression,
+    );
     for (const call of emitCalls) {
       const expression = call.getExpression();
       if (expression.getText().endsWith('.emit')) {

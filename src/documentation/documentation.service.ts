@@ -1,19 +1,25 @@
 import {
   Injectable,
-  NotFoundException,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { execFile } from 'child_process';
 import * as fs from 'fs';
+import * as glob from 'glob';
 import * as path from 'path';
-import tree from 'tree-node-cli';
-import { ErdGeneratorService } from '../generators/erd-generator.service';
-import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
-import { ParsedProjectData, EntityRelationship, ClassInfo, FunctionInfo } from '../common/types';
 import { generateApiDoc } from 'src/scripts/api-parser.util';
 import { analyzeProjectFlows } from 'src/scripts/flow-analyzer.util';
+import { generatePythonApiDoc } from 'src/scripts/python-api-parser.util';
 import { parseWebSockets } from 'src/scripts/websocket-parser.util';
+import tree from 'tree-node-cli';
+import {
+  ParsedProjectData,
+  IdentifiedFlow,
+  SocketGatewayInfo,
+} from '../common/types';
+import { ErdGeneratorService } from '../generators/erd-generator.service';
+import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
 
 @Injectable()
 export class DocumentationService {
@@ -40,10 +46,30 @@ export class DocumentationService {
     let apiDocs = this.findAndParseApiSpec(projectPath);
 
     if (!apiDocs) {
-      try {
-        apiDocs = generateApiDoc(projectPath);
-      } catch (e) {
-        console.error('Failed to generate API docs from source:', e);
+      if (this.isTypeScriptProject(projectPath)) {
+        try {
+          apiDocs = generateApiDoc(projectPath);
+        } catch (e) {
+          console.error('Failed to generate API docs from source:', e);
+          apiDocs = [];
+        }
+      } else if (await this.isPythonProject(projectPath)) {
+        try {
+          apiDocs = generatePythonApiDoc(projectPath); // Call the new placeholder function
+          console.log(
+            'Python project detected. Attempting Python API doc generation.',
+          );
+          // TODO: Add database model/entity extraction for Python (Django ORM, SQLAlchemy, etc.)
+          // Example: parsedData.entities = extractPythonEntities(projectPath);
+          // Example: parsedData.relationships = extractPythonRelationships(projectPath);
+        } catch (e) {
+          console.error('Failed to generate API docs from source (Python):', e);
+          apiDocs = [];
+        }
+      } else {
+        console.log(
+          'Skipping API doc generation from source: Not a TypeScript project.',
+        );
         apiDocs = [];
       }
     }
@@ -61,8 +87,13 @@ export class DocumentationService {
       outputDir,
     );
 
-    const flows = analyzeProjectFlows(projectPath);
-    const webSocketInfo = parseWebSockets(projectPath);
+    // Only analyze flows and sockets for TypeScript projects
+    let flows: IdentifiedFlow[] = [];
+    let webSocketInfo: SocketGatewayInfo[] = [];
+    if (this.isTypeScriptProject(projectPath)) {
+      flows = analyzeProjectFlows(projectPath);
+      webSocketInfo = parseWebSockets(projectPath);
+    }
 
     // Generate Markdown content
     const markdownContent = this.markdownGenerator.generate(
@@ -115,17 +146,41 @@ export class DocumentationService {
         (error, stdout, stderr) => {
           if (error) {
             console.error(`Go Parser Error: ${stderr}`);
-            return reject(new InternalServerErrorException('Go parser failed.'));
+            return reject(
+              new InternalServerErrorException('Go parser failed.'),
+            );
           }
           try {
             const parsedJson: ParsedProjectData = JSON.parse(stdout);
             resolve(parsedJson);
           } catch (err) {
             console.error(`JSON parsing error: ${err}. STDOUT: ${stdout}`);
-            reject(new InternalServerErrorException('Failed to parse Go parser output.'));
+            reject(
+              new InternalServerErrorException(
+                'Failed to parse Go parser output.',
+              ),
+            );
           }
         },
       );
     });
+  }
+
+  private isTypeScriptProject(projectPath: string): boolean {
+    const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+    return fs.existsSync(tsConfigPath);
+  }
+
+  private async isPythonProject(projectPath: string): Promise<boolean> {
+    const pythonFiles = await glob.glob(path.join(projectPath, '**/*.py'), {
+      ignore: ['**/node_modules/**', '**/dist/**', '**/venv/**'],
+    });
+    const hasRequirementsTxt = fs.existsSync(
+      path.join(projectPath, 'requirements.txt'),
+    );
+    const hasPyprojectToml = fs.existsSync(
+      path.join(projectPath, 'pyproject.toml'),
+    );
+    return pythonFiles.length > 0 || hasRequirementsTxt || hasPyprojectToml;
   }
 }

@@ -10,7 +10,9 @@ export class DocumentationController {
   constructor(private readonly documentationService: DocumentationService) {}
 
   @Post('generate')
-  @ApiOperation({ summary: 'Generate a Markdown documentation file for a project folder' })
+  @ApiOperation({
+    summary: 'Generate a Markdown documentation file for a project folder',
+  })
   async generateDocumentation(
     @Body() createDocumentationDto: CreateDocumentationDto,
     @Res() res: Response,
@@ -20,10 +22,7 @@ export class DocumentationController {
         createDocumentationDto.projectPath,
       );
 
-      res.setHeader(
-        'Content-Type',
-        'text/markdown',
-      );
+      res.setHeader('Content-Type', 'text/markdown');
       res.setHeader(
         'Content-Disposition',
         'attachment; filename=documentation.md',

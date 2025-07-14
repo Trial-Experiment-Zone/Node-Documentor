@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { Node, Project, SyntaxKind, Type } from 'ts-morph';
+import * as fs from 'fs';
 
 const IGNORED_TYPES = new Set([
   'Blob',
@@ -13,8 +14,14 @@ const IGNORED_TYPES = new Set([
 ]);
 
 export function generateApiDoc(projectPath: string): any[] {
+  // Only run if tsconfig.json exists in the projectPath
+  const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+  if (!fs.existsSync(tsConfigPath)) {
+    // Not a TypeScript project, skip
+    return [];
+  }
   const project = new Project({
-    tsConfigFilePath: path.join(projectPath, 'tsconfig.json'),
+    tsConfigFilePath: tsConfigPath,
     skipAddingFilesFromTsConfig: false,
   });
 

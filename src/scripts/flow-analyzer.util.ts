@@ -4,10 +4,21 @@ import * as fs from 'fs';
 
 // Keywords to identify key business flows
 const FLOW_KEYWORDS = [
-  'auth', 'login', 'register', 'password', 'jwt',
-  'payment', 'checkout', 'subscription', 'charge',
-  'order', 'cart', 'product',
-  'user', 'profile', 'account',
+  'auth',
+  'login',
+  'register',
+  'password',
+  'jwt',
+  'payment',
+  'checkout',
+  'subscription',
+  'charge',
+  'order',
+  'cart',
+  'product',
+  'user',
+  'profile',
+  'account',
 ];
 
 interface IdentifiedFlow {
@@ -23,18 +34,23 @@ interface IdentifiedFlow {
  */
 export function analyzeProjectFlows(projectPath: string): IdentifiedFlow[] {
   const identifiedFlows: IdentifiedFlow[] = [];
-  const project = new Project();
-
-  // Add all source files, but be careful about exclusions
-  const sourceFiles = project.addSourceFilesAtPaths(path.join(projectPath, 'src/**/*.{ts,js}'));
-  
+  // Only run ts-morph if tsconfig.json exists
+  const tsConfigPath = path.join(projectPath, 'tsconfig.json');
+  let sourceFiles: SourceFile[] = [];
+  if (fs.existsSync(tsConfigPath)) {
+    const project = new Project();
+    sourceFiles = project.addSourceFilesAtPaths(
+      path.join(projectPath, 'src/**/*.{ts,js}'),
+    );
+  }
   // Also consider non-code files that might contain flow info
   const otherFiles = findRelevantFiles(projectPath);
-
   for (const file of [...sourceFiles, ...otherFiles]) {
-    const content = (typeof file === 'string') ? fs.readFileSync(file, 'utf-8') : file.getFullText();
-    const filePath = (typeof file === 'string') ? file : file.getFilePath();
-
+    const content =
+      typeof file === 'string'
+        ? fs.readFileSync(file, 'utf-8')
+        : file.getFullText();
+    const filePath = typeof file === 'string' ? file : file.getFilePath();
     for (const keyword of FLOW_KEYWORDS) {
       if (content.toLowerCase().includes(keyword)) {
         // Basic implementation: just note the file and keyword.
@@ -47,13 +63,14 @@ export function analyzeProjectFlows(projectPath: string): IdentifiedFlow[] {
       }
     }
   }
-
   // Deduplicate based on file path and keyword
   const uniqueFlows = identifiedFlows.filter(
     (flow, index, self) =>
-      index === self.findIndex((f) => f.filePath === flow.filePath && f.keyword === flow.keyword)
+      index ===
+      self.findIndex(
+        (f) => f.filePath === flow.filePath && f.keyword === flow.keyword,
+      ),
   );
-
   return uniqueFlows;
 }
 
@@ -62,19 +79,22 @@ export function analyzeProjectFlows(projectPath: string): IdentifiedFlow[] {
  * @param projectPath The project path.
  */
 function findRelevantFiles(projectPath: string): string[] {
-    const files: string[] = [];
-    const entries = fs.readdirSync(projectPath, { withFileTypes: true });
+  const files: string[] = [];
+  const entries = fs.readdirSync(projectPath, { withFileTypes: true });
 
-    for (const entry of entries) {
-        const fullPath = path.join(projectPath, entry.name);
-        if (entry.isDirectory()) {
-            if (['.git', 'node_modules', 'dist', 'output'].includes(entry.name)) {
-                continue;
-            }
-            files.push(...findRelevantFiles(fullPath));
-        } else if (entry.isFile() && ['.md', '.json', '.yaml', '.yml'].some(ext => entry.name.endsWith(ext))) {
-            files.push(fullPath);
-        }
+  for (const entry of entries) {
+    const fullPath = path.join(projectPath, entry.name);
+    if (entry.isDirectory()) {
+      if (['.git', 'node_modules', 'dist', 'output'].includes(entry.name)) {
+        continue;
+      }
+      files.push(...findRelevantFiles(fullPath));
+    } else if (
+      entry.isFile() &&
+      ['.md', '.json', '.yaml', '.yml'].some((ext) => entry.name.endsWith(ext))
+    ) {
+      files.push(fullPath);
     }
-    return files;
+  }
+  return files;
 }

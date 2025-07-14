@@ -3,6 +3,9 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +64,7 @@ func (p *UnifiedParser) Parse(projectPath string) (*types.ParsedProjectData, err
 				}
 			}(path)
 		}
-		
+
 		// --- Strategy 3: Mongoose/TypeORM Schemas (via AST parser script) ---
 		// We only run this once per project.
 		if (strings.HasSuffix(info.Name(), ".model.ts") || strings.HasSuffix(info.Name(), ".schema.ts") || strings.HasSuffix(info.Name(), ".entity.ts")) && !astParserRun[projectPath] {
@@ -75,6 +78,19 @@ func (p *UnifiedParser) Parse(projectPath string) (*types.ParsedProjectData, err
 					resultsChan <- data
 				}
 			}(projectPath)
+		}
+
+		// --- Strategy 4: Go AST Parsing ---
+		if strings.HasSuffix(info.Name(), ".go") {
+			wg.Add(1)
+			go func(filePath string) {
+				defer wg.Done()
+				if data, err := parseGoSourceFile(filePath); err != nil {
+					errorChan <- fmt.Errorf("failed to parse Go source file %s: %w", filePath, err)
+				} else if data != nil {
+					resultsChan <- data
+				}
+			}(path)
 		}
 
 		return nil
@@ -120,13 +136,13 @@ func parsePrismaSchema(filePath string) (*types.ParsedProjectData, error) {
 	}
 
 	schemaContent := string(content)
-	
+
 	// Regex to find all model blocks
 	modelRegex := regexp.MustCompile(`(?s)model\s+(\w+)\s*\{([^}]+)\}`)
-	
+
 	// Regex to parse fields within a model
 	fieldRegex := regexp.MustCompile(`^\s*(\w+)\s+([\w\[\]]+)\s*(@.*)?$`)
-	
+
 	// Regex to parse relationships from relation attributes
 	relationRegex := regexp.MustCompile(`@relation\s*\(\s*fields:\s*\[([^\]]+)\]\,\s*references:\s*\[([^\]]+)\]`)
 
@@ -171,13 +187,13 @@ func parsePrismaSchema(filePath string) (*types.ParsedProjectData, error) {
 				if strings.Contains(attributes, "@relation") {
 					// This is a simplified relationship detection.
 					// A more robust implementation would parse the full @relation attribute.
-					
+
 					// Try to find the related model type
 					relatedModelType := propType
 					if strings.HasSuffix(relatedModelType, "[]") {
 						relatedModelType = strings.TrimSuffix(relatedModelType, "[]")
 					}
-					
+
 					// Heuristic to determine relationship type
 					relType := "OneToOne"
 					if strings.HasSuffix(propType, "[]") {
@@ -253,4 +269,112 @@ func parseWithASTScript(projectPath string) (*types.ParsedProjectData, error) {
 	}
 
 	return &parsed, nil
+}
+
+func parseGoSourceFile(filePath string) (*types.ParsedProjectData, error) {
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+	if err != nil {
+		return nil, err
+	}
+
+	entities := []types.ClassInfo{}
+	functions := []types.APIFunctionInfo{}
+	relationships := []types.RelationshipInfo{}
+
+	structNames := make(map[string]bool)
+
+	// Extract structs (entities)
+	for _, decl := range node.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			structType, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			structNames[typeSpec.Name.Name] = true
+			entity := types.ClassInfo{
+				Name:       typeSpec.Name.Name,
+				FilePath:   filePath,
+				Docs:       "", // Optionally extract doc comments
+				Methods:    []types.MethodInfo{},
+				Properties: []types.PropertyInfo{},
+			}
+			for _, field := range structType.Fields.List {
+				fieldType := ""
+				if ident, ok := field.Type.(*ast.Ident); ok {
+					fieldType = ident.Name
+				}
+				if arrType, ok := field.Type.(*ast.ArrayType); ok {
+					if ident, ok := arrType.Elt.(*ast.Ident); ok {
+						fieldType = "[]" + ident.Name
+					}
+				}
+				for _, name := range field.Names {
+					entity.Properties = append(entity.Properties, types.PropertyInfo{
+						Name:       name.Name,
+						Type:       fieldType,
+						Decorators: []string{}, // Optionally parse struct tags
+					})
+				}
+			}
+			entities = append(entities, entity)
+		}
+	}
+
+	// Extract REST handlers (functions with http.ResponseWriter, *http.Request)
+	for _, decl := range node.Decls {
+		funcDecl, ok := decl.(*ast.FuncDecl)
+		if !ok || funcDecl.Recv != nil {
+			continue // Only top-level functions
+		}
+		if funcDecl.Type.Params != nil && len(funcDecl.Type.Params.List) == 2 {
+			// Check for (w http.ResponseWriter, r *http.Request)
+			functions = append(functions, types.APIFunctionInfo{
+				Name:       funcDecl.Name.Name,
+				Method:     "UNKNOWN", // Could try to infer from comments or router setup
+				Route:      "",
+				Docs:       "",
+				ReturnType: "",
+			})
+		}
+	}
+
+	// Relationship extraction: for each struct, check if any field type matches another struct
+	for _, entity := range entities {
+		for _, prop := range entity.Properties {
+			// OneToMany: slice of another struct
+			if strings.HasPrefix(prop.Type, "[]") {
+				target := strings.TrimPrefix(prop.Type, "[]")
+				if structNames[target] {
+					relationships = append(relationships, types.RelationshipInfo{
+						From: entity.Name,
+						To:   target,
+						Type: "OneToMany",
+					})
+				}
+			} else if structNames[prop.Type] {
+				// OneToOne: direct field of another struct
+				relationships = append(relationships, types.RelationshipInfo{
+					From: entity.Name,
+					To:   prop.Type,
+					Type: "OneToOne",
+				})
+			}
+		}
+	}
+
+	return &types.ParsedProjectData{
+		Entities:      entities,
+		Classes:       entities,
+		Functions:     functions,
+		Relationships: relationships,
+	}, nil
 }

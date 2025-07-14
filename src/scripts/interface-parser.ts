@@ -1,6 +1,7 @@
 import * as path from 'path';
-import { Project, ClassDeclaration, Decorator, Type, Node, PropertyDeclaration } from 'ts-morph';
-import { ClassInfo, PropertyInfo, EntityRelationship } from '../common/types';
+import { ClassDeclaration, Node, Project, Type } from 'ts-morph';
+import { ClassInfo, EntityRelationship, PropertyInfo } from '../common/types';
+import * as fs from 'fs';
 
 // --- Configuration ---
 const ENTITY_DECORATORS = ['Entity', 'Schema'];
@@ -14,8 +15,15 @@ const RELATIONSHIP_DECORATORS = [
 // --- Main Logic ---
 
 function main() {
+  // Only run if tsconfig.json exists in the current working directory
+  const tsConfigPath = path.join(process.cwd(), 'tsconfig.json');
+  if (!fs.existsSync(tsConfigPath)) {
+    // Not a TypeScript project, skip
+    console.log(JSON.stringify({ entities: [], relationships: [] }, null, 2));
+    return;
+  }
   const project = new Project({
-    tsConfigFilePath: path.join(process.cwd(), 'tsconfig.json'),
+    tsConfigFilePath: tsConfigPath,
     skipAddingFilesFromTsConfig: true, // We will add files manually
   });
   project.addSourceFilesAtPaths('src/**/*.ts');
@@ -91,7 +99,7 @@ function parseRelationships(
       } else {
         targetEntityType = typeArg.getType();
       }
-      
+
       if (!targetEntityType) continue;
 
       const targetEntityName =
@@ -102,7 +110,7 @@ function parseRelationships(
         to: targetEntityName,
         type: relationshipType,
       });
-      continue; 
+      continue;
     }
 
     // --- Strategy 2: @Prop with `ref` (Mongoose) ---
@@ -123,7 +131,7 @@ function parseRelationships(
             } else {
               targetEntityName = refInitializer.getText();
             }
-            
+
             const isArray = prop.getType().isArray();
             const relationshipType = isArray ? 'OneToMany' : 'ManyToOne';
 
