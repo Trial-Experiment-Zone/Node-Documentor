@@ -86,6 +86,27 @@
       word-break: break-word;
     }
     
+    .btn-icon {
+      border: none !important;
+      background: transparent !important;
+      box-shadow: none !important;
+    }
+    
+    .btn-icon:hover {
+      color: var(--primary) !important;
+      background: rgba(78, 115, 223, 0.1) !important;
+    }
+    
+    #refresh-structure.btn-icon:hover {
+      background: transparent !important;
+      color: inherit !important;
+    }
+    
+    #toggle-view {
+      border: none;
+      background: transparent;
+    }
+    
     @media (max-width: 768px) {
       .app-sidebar {
         position: fixed;
@@ -108,13 +129,19 @@
   <!-- Header with mobile menu toggle -->
   <header class="app-header navbar navbar-dark bg-primary">
     <div class="container-fluid px-4">
-      <button class="navbar-toggler d-md-none me-2" type="button" onclick="toggleSidebar()">
+      <button class="navbar-toggler d-md-none me-2 btn-icon" type="button" onclick="toggleSidebar()">
         <i class="fas fa-bars"></i>
       </button>
       <span class="navbar-brand d-flex align-items-center">
         <i class="fas fa-book-open fa-fw me-2"></i>
         <span class="fw-bold">Documentation Explorer</span>
       </span>
+      <div class="d-flex">
+        <input id="project-upload" type="file" webkitdirectory directory class="d-none">
+        <label for="project-upload" class="btn btn-sm btn-light ms-2">
+          <i class="fas fa-upload fa-fw me-2"></i>Upload Project
+        </label>
+      </div>
     </div>
   </header>
 
@@ -124,10 +151,10 @@
     <nav class="app-sidebar">
       <div class="sidebar-header d-flex align-items-center justify-content-between px-4 py-3">
         <h5 class="mb-0 fw-bold text-primary">
-          <i class="fas fa-folder-open fa-fw me-2"></i>Project Structure
+          <i class="fas fa-folder-open me-2"></i>Projects
         </h5>
-        <button id="refresh-structure" class="btn btn-sm btn-primary" title="Refresh">
-          <i class="fas fa-sync-alt fa-fw"></i>
+        <button id="refresh-structure" class="btn btn-link text-dark" title="Refresh">
+          <i class="fas fa-sync-alt"></i>
         </button>
       </div>
       <div id="file-tree" class="sidebar-body px-3 py-2">
@@ -144,13 +171,9 @@
             <span id="file-title">Select a file</span>
           </h5>
           <div class="d-flex">
-            <button id="toggle-view" class="btn btn-sm btn-outline-primary me-2" title="Toggle View">
+            <button id="toggle-view" class="btn btn-sm btn-icon" title="Toggle View">
               <i class="fas fa-eye fa-fw"></i>
             </button>
-            <input id="project-upload" type="file" webkitdirectory directory class="d-none">
-            <label for="project-upload" class="btn btn-sm btn-primary">
-              <i class="fas fa-upload fa-fw me-2"></i>Upload Project
-            </label>
           </div>
         </div>
         <div id="markdown-content" class="card-body p-4">

@@ -22,32 +22,23 @@ async function loadProjectStructure(folder = '') {
 function renderFileTree(items) {
   const container = document.getElementById('file-tree');
   container.innerHTML = '';
+  
   items.forEach(item => {
-    const li = document.createElement('div');
-    li.className = 'list-group-item d-flex justify-content-between align-items-center';
-    li.textContent = item.name;
-    li.onclick = () => {
-      if (item.isDirectory) loadProjectStructure(item.path);
-      else loadFileContent(item.path);
-    };
-
+    const div = document.createElement('div');
+    div.className = 'd-flex align-items-center mb-2';
+    
+    const icon = document.createElement('i');
+    icon.className = item.isDirectory ? 'fas fa-folder text-warning me-2' : 'fas fa-file text-muted me-2';
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'flex-grow-1';
+    nameSpan.textContent = item.name;
+    
+    div.append(icon, nameSpan);
+    
     if (!item.isDirectory) {
-      const btnGroup = document.createElement('div');
-      btnGroup.className = 'btn-group btn-group-sm';
-
-      // Delete button
-      const delBtn = document.createElement('button');
-      delBtn.className = 'btn btn-outline-danger';
-      delBtn.innerHTML = '<i class="fas fa-trash"></i>';
-      delBtn.title = 'Delete file';
-      delBtn.onclick = e => {
-        e.stopPropagation();
-        deleteFileManagerItem(item.path, 'file');
-      };
-
-      // Rename button
       const editBtn = document.createElement('button');
-      editBtn.className = 'btn btn-outline-secondary';
+      editBtn.className = 'btn btn-link text-secondary p-0 ms-2';
       editBtn.innerHTML = '<i class="fas fa-edit"></i>';
       editBtn.title = 'Rename file';
       editBtn.onclick = e => {
@@ -55,12 +46,25 @@ function renderFileTree(items) {
         const newName = prompt('New file name:', item.name);
         if (newName) renameFileManagerPath(item.path, newName);
       };
-
-      btnGroup.append(delBtn, editBtn);
-      li.append(btnGroup);
+      
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-link text-danger p-0 ms-1';
+      delBtn.innerHTML = '<i class="fas fa-trash"></i>';
+      delBtn.title = 'Delete file';
+      delBtn.onclick = e => {
+        e.stopPropagation();
+        deleteFileManagerItem(item.path, 'file');
+      };
+      
+      div.append(editBtn, delBtn);
     }
-
-    container.append(li);
+    
+    div.onclick = () => {
+      if (item.isDirectory) loadProjectStructure(item.path);
+      else loadFileContent(item.path);
+    };
+    
+    container.append(div);
   });
 }
 
