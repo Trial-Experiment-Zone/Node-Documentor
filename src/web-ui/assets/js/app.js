@@ -72,10 +72,19 @@ async function loadFileContent(path) {
   try {
     const res = await fetch(`${config.apiBaseUrl}/file-manager/content?file=${encodeURIComponent(path)}`);
     const text = await res.text();
-    document.getElementById('markdown-content').innerHTML =
+    
+    // Update UI
+    document.getElementById('file-title').textContent = path.split('/').pop();
+    document.getElementById('empty-state').classList.add('d-none');
+    document.getElementById('rendered-view').classList.remove('d-none');
+    
+    document.getElementById('rendered-view').innerHTML = 
       `<pre class="bg-light p-3 text-monospace">${escapeHtml(text)}</pre>`;
   } catch {
-    document.getElementById('markdown-content').innerHTML = '<div class="text-danger p-2">Error loading file</div>';
+    document.getElementById('empty-state').classList.add('d-none');
+    document.getElementById('rendered-view').classList.remove('d-none');
+    document.getElementById('rendered-view').innerHTML = 
+      '<div class="alert alert-danger">Error loading file</div>';
   }
 }
 
@@ -115,6 +124,13 @@ async function renameFileManagerPath(oldPath, newName) {
     console.error('Error renaming file:', error);
     showToast('Error renaming file', 'danger');
   }
+}
+
+function resetFileView() {
+  document.getElementById('file-title').textContent = 'Select a file';
+  document.getElementById('empty-state').classList.remove('d-none');
+  document.getElementById('rendered-view').classList.add('d-none');
+  document.getElementById('code-view').classList.add('d-none');
 }
 
 //

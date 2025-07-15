@@ -167,16 +167,21 @@
       <div class="doc-preview mb-4">
         <div class="card-header d-flex justify-content-between align-items-center py-3 px-4">
           <h5 class="mb-0 text-primary">
-            <i class="fas fa-file-alt fa-fw me-2"></i>
+            <i class="fas fa-file-alt me-2"></i>
             <span id="file-title">Select a file</span>
           </h5>
           <div class="d-flex">
-            <button id="toggle-view" class="btn btn-sm btn-icon" title="Toggle View">
-              <i class="fas fa-eye fa-fw"></i>
+            <button id="toggle-view" class="btn btn-link text-dark" title="Toggle View">
+              <i class="fas fa-eye"></i>
             </button>
           </div>
         </div>
         <div id="markdown-content" class="card-body p-4">
+          <div id="empty-state" class="py-5 text-center">
+            <i class="fas fa-folder-open fa-3x text-muted mb-3"></i>
+            <h5 class="text-muted">No file selected</h5>
+            <p class="text-muted">Select a file from the project tree to view its contents</p>
+          </div>
           <div id="rendered-view" class="flex-fill overflow-auto p-3 bg-white"></div>
           <div id="code-view" class="flex-fill overflow-auto p-3 bg-light font-monospace d-none">
             <pre id="code-content" class="m-0"></pre>
