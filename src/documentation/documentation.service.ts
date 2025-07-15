@@ -10,16 +10,16 @@ import * as glob from 'glob';
 import * as path from 'path';
 import { generateApiDoc } from 'src/scripts/api-parser.util';
 import { analyzeProjectFlows } from 'src/scripts/flow-analyzer.util';
+import { IdentifiedFlow, FlowSummary } from '../common/types';
 import { generatePythonApiDoc } from 'src/scripts/python-api-parser.util';
 import { parseWebSockets } from 'src/scripts/websocket-parser.util';
 import tree from 'tree-node-cli';
-import {
-  ParsedProjectData,
-  IdentifiedFlow,
-  SocketGatewayInfo,
-} from '../common/types';
+import { ParsedProjectData, SocketGatewayInfo } from '../common/types';
 import { ErdGeneratorService } from '../generators/erd-generator.service';
 import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
+import { parseGoEndpoints } from 'src/scripts/go-api-parser.util';
+import { parseMongoSchemas } from '../parsers/nosql/mongo-parser';
+import { PythonApiParserService } from '../scripts/python-api-parser.service';
 
 @Injectable()
 export class DocumentationService {
@@ -28,7 +28,8 @@ export class DocumentationService {
   constructor(
     private readonly configService: ConfigService,
     private readonly erdGenerator: ErdGeneratorService,
-    private readonly markdownGenerator: MarkdownGeneratorService, // Changed
+    private readonly markdownGenerator: MarkdownGeneratorService,
+    private readonly pythonApiParser: PythonApiParserService,
   ) {
     const relativePath = this.configService.get<string>(
       'GO_PARSER_PATH',
@@ -37,48 +38,65 @@ export class DocumentationService {
     this.goParserExecutablePath = path.resolve(process.cwd(), relativePath);
   }
 
-  public async generateDocumentation(projectPath: string): Promise<Buffer> {
+  public async generateDocumentation(projectPath: string): Promise<string> {
     if (!fs.existsSync(projectPath)) {
       throw new NotFoundException(`Project path not found: ${projectPath}`);
     }
 
-    const parsedData = await this.runGoParser(projectPath);
-    let apiDocs = this.findAndParseApiSpec(projectPath);
+    const existingParsedData = await this.runGoParser(projectPath);
+    const mongoSchemas = parseMongoSchemas(projectPath);
+    const parsedData = {
+      ...existingParsedData,
+      mongoSchemas,
+      name: path.basename(projectPath),
+      path: projectPath,
+      type: 'project',
+      description: existingParsedData.description,
+      entities: existingParsedData.entities,
+      relationships: existingParsedData.relationships,
+    };
 
-    if (!apiDocs) {
-      if (this.isTypeScriptProject(projectPath)) {
-        try {
-          apiDocs = generateApiDoc(projectPath);
-        } catch (e) {
-          console.error('Failed to generate API docs from source:', e);
-          apiDocs = [];
-        }
-      } else if (await this.isPythonProject(projectPath)) {
-        try {
-          apiDocs = generatePythonApiDoc(projectPath); // Call the new placeholder function
-          console.log(
-            'Python project detected. Attempting Python API doc generation.',
-          );
-          // TODO: Add database model/entity extraction for Python (Django ORM, SQLAlchemy, etc.)
-          // Example: parsedData.entities = extractPythonEntities(projectPath);
-          // Example: parsedData.relationships = extractPythonRelationships(projectPath);
-        } catch (e) {
-          console.error('Failed to generate API docs from source (Python):', e);
-          apiDocs = [];
-        }
-      } else {
-        console.log(
-          'Skipping API doc generation from source: Not a TypeScript project.',
-        );
+    let apiDocs;
+    if (this.isTypeScriptProject(projectPath)) {
+      try {
+        apiDocs = generateApiDoc(projectPath);
+      } catch (e) {
+        console.error('Failed to generate API docs from source:', e);
         apiDocs = [];
       }
+    } else if (await this.isPythonProject(projectPath)) {
+      apiDocs = await this.pythonApiParser.parsePythonApis(projectPath);
+      const djangoEndpoints = apiDocs.filter((d) => d.framework === 'django');
+      if (djangoEndpoints.length > 0) {
+        console.log(
+          'Parsed Django endpoints:',
+          JSON.stringify(djangoEndpoints, null, 2),
+        );
+      }
+    } else if (this.isGoProject(projectPath)) {
+      try {
+        apiDocs = parseGoEndpoints(projectPath);
+        console.log(
+          'Go (Gin) project detected. Generated API docs from router files.',
+        );
+      } catch (e) {
+        console.error('Failed to generate API docs from source (Go):', e);
+        apiDocs = [];
+      }
+    } else {
+      console.log(
+        'Skipping API doc generation from source: Not a TypeScript project.',
+      );
+      apiDocs = [];
     }
 
     const folderTree = tree(projectPath, {
       exclude: [/node_modules/, /dist/, /\.git/, /output/],
     });
 
-    const projectName = path.basename(projectPath);
+    const projectName = parsedData.name || path.basename(projectPath);
+    const projectDescription =
+      parsedData.description || 'No description available';
     const outputDir = path.resolve(process.cwd(), 'output', projectName);
     await fs.promises.mkdir(outputDir, { recursive: true });
 
@@ -88,30 +106,54 @@ export class DocumentationService {
     );
 
     // Only analyze flows and sockets for TypeScript projects
-    let flows: IdentifiedFlow[] = [];
     let webSocketInfo: SocketGatewayInfo[] = [];
+    let keywordFlows: IdentifiedFlow[] = [];
+    let flowSummaries: FlowSummary[] = [];
+
     if (this.isTypeScriptProject(projectPath)) {
-      flows = analyzeProjectFlows(projectPath);
+      const analysisResults = analyzeProjectFlows(projectPath);
+
+      // Strictly separate the two flow types
+      keywordFlows = analysisResults.filter(
+        (result): result is IdentifiedFlow => 'keyword' in result,
+      );
+
+      flowSummaries = analysisResults.filter(
+        (result): result is FlowSummary => 'type' in result,
+      );
+
       webSocketInfo = parseWebSockets(projectPath);
     }
 
+    const alembicMigrations = detectAlembicMigrations(projectPath);
+
     // Generate Markdown content
-    const markdownContent = this.markdownGenerator.generate(
-      projectName,
-      parsedData,
-      folderTree,
-      erdMermaidCode,
+    const databaseTables = parsedData.entities || [];
+    const formattedTables = databaseTables
+      .map(
+        (table) =>
+          `${table.name}\n${table.properties?.map((p) => `- ${p.name}: ${p.type}`).join('\n') || 'No columns'}`,
+      )
+      .join('\n\n');
+
+    const markdown = this.markdownGenerator.generate(
       apiDocs,
-      flows,
+      keywordFlows,
+      flowSummaries,
       webSocketInfo,
+      apiDocs.filter((d) => d.type === 'django-model'),
+      erdMermaidCode,
+      formattedTables,
+      folderTree,
+      projectDescription,
+      alembicMigrations,
     );
 
-    // Save the Markdown file
+    // Include formattedTables in the final markdown content
+    const finalMarkdown = `${markdown}\n\n${formattedTables}`;
     const filePath = path.join(outputDir, `${projectName}-documentation.md`);
-    await fs.promises.writeFile(filePath, markdownContent);
-
-    // Return the markdown content as a buffer
-    return Buffer.from(markdownContent, 'utf-8');
+    await fs.promises.writeFile(filePath, finalMarkdown);
+    return finalMarkdown;
   }
 
   private findAndParseApiSpec(projectPath: string): any[] | null {
@@ -121,7 +163,7 @@ export class DocumentationService {
       if (fs.existsSync(filePath)) {
         try {
           const fileContent = fs.readFileSync(filePath, 'utf-8');
-          return JSON.parse(fileContent); // Return the raw spec
+          return JSON.parse(fileContent);
         } catch (e) {
           console.error(`Error parsing API spec file ${fileName}:`, e);
           return null;
@@ -183,4 +225,32 @@ export class DocumentationService {
     );
     return pythonFiles.length > 0 || hasRequirementsTxt || hasPyprojectToml;
   }
+
+  private isGoProject(projectPath: string): boolean {
+    try {
+      const files = fs.readdirSync(projectPath);
+      return files.some(
+        (file) =>
+          file === 'go.mod' ||
+          file.endsWith('.go') ||
+          fs.existsSync(path.join(projectPath, 'go.sum')),
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private processKeywordFlows(flows: IdentifiedFlow[]): void {
+    // Implementation using only IdentifiedFlow properties
+  }
+
+  private processFlowSummaries(summaries: FlowSummary[]): void {
+    // Implementation using only FlowSummary properties
+  }
+}
+
+function detectAlembicMigrations(projectPath: string): any[] {
+  // Implementation to detect Alembic migrations
+  // For demonstration purposes, return an empty array
+  return [];
 }

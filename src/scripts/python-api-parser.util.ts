@@ -1,3 +1,4 @@
+import { findPythonFiles } from '../shared/file-utils';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Node, Project, SyntaxKind, Type } from 'ts-morph';
@@ -30,7 +31,10 @@ export function generatePythonApiDoc(projectPath: string): any[] {
         const pythonFiles = findPythonFiles(searchPath);
 
         for (const filePath of pythonFiles) {
-          const endpoints = parsePythonFile(filePath);
+          const endpoints = parsePythonFile(
+            fs.readFileSync(filePath, 'utf-8'),
+            filePath,
+          );
           controllers.push(...endpoints);
         }
       }
@@ -42,42 +46,23 @@ export function generatePythonApiDoc(projectPath: string): any[] {
   return controllers;
 }
 
-function findPythonFiles(dir: string): string[] {
-  const files: string[] = [];
-
-  function traverse(currentDir: string) {
-    const items = fs.readdirSync(currentDir);
-
-    for (const item of items) {
-      const fullPath = path.join(currentDir, item);
-      const stat = fs.statSync(fullPath);
-
-      if (
-        stat.isDirectory() &&
-        !item.startsWith('.') &&
-        item !== '__pycache__'
-      ) {
-        traverse(fullPath);
-      } else if (item.endsWith('.py')) {
-        files.push(fullPath);
-      }
-    }
-  }
-
-  traverse(dir);
-  return files;
-}
-
-function parsePythonFile(filePath: string): any[] {
-  const content = fs.readFileSync(filePath, 'utf-8');
+function parsePythonFile(content: string, filePath: string): any[] {
   const endpoints: any[] = [];
 
-  // Parse different Python web frameworks
-  const flaskEndpoints = parseFlaskEndpoints(content, filePath);
-  const fastApiEndpoints = parseFastApiEndpoints(content, filePath);
-  const djangoEndpoints = parseDjangoEndpoints(content, filePath);
+  // Check if this is a Django URL file
+  if (filePath.includes('urls.py') || filePath.includes('/urls/')) {
+    endpoints.push(...parseDjangoEndpoints(content, filePath));
+  }
 
-  endpoints.push(...flaskEndpoints, ...fastApiEndpoints, ...djangoEndpoints);
+  // Check for models
+  if (filePath.endsWith('models.py')) {
+    endpoints.push(...parseDjangoModels(content, filePath));
+    endpoints.push(...parseSqlAlchemyModels(content, filePath));
+  }
+
+  // Parse other framework endpoints
+  endpoints.push(...parseFlaskEndpoints(content, filePath));
+  endpoints.push(...parseFastApiEndpoints(content, filePath));
 
   return endpoints;
 }
@@ -89,18 +74,24 @@ function parseFlaskEndpoints(content: string, filePath: string): any[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
 
-    // Flask route decorator pattern: @app.route('/path', methods=['GET'])
-    const routeMatch = line.match(
-      /@(?:app|bp|blueprint)\.route\s*\(\s*['"]([^'"]+)['"](?:.*methods\s*=\s*\[([^\]]+)\])?/,
+    // Modern Flask route decorator pattern
+    const methodRouteMatch = line.match(
+      /@(\w+)\.(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]/,
     );
+    if (methodRouteMatch) {
+      const route = methodRouteMatch[3];
+      const methods = [methodRouteMatch[2].toUpperCase()];
 
-    if (routeMatch) {
-      const route = routeMatch[1];
-      const methods = routeMatch[2]
-        ? routeMatch[2]
-            .split(',')
-            .map((m) => m.trim().replace(/['"]/g, '').toUpperCase())
-        : ['GET'];
+      // Parse route parameters (e.g. <int:id>)
+      const routeParams: any[] = [];
+      const paramMatches = route.matchAll(/<([^:>]+:)?([^>]+)>/g);
+      for (const match of paramMatches) {
+        routeParams.push({
+          name: match[2],
+          type: match[1] ? match[1].replace(':', '') : 'string',
+          in: 'path',
+        });
+      }
 
       // Find the function definition
       let functionName = '';
@@ -113,28 +104,115 @@ function parseFlaskEndpoints(content: string, filePath: string): any[] {
 
         if (funcMatch) {
           functionName = funcMatch[1];
-          const params = funcMatch[2];
-          functionParams = parseFlaskParams(params);
+          functionParams = parseFlaskParams(funcMatch[2]);
 
           // Extract docstring if present
           if (j + 1 < lines.length && lines[j + 1].trim().startsWith('"""')) {
             docstring = extractDocstring(lines, j + 1);
           }
+
+          // Analyze function body
+          const responseType = content.includes('jsonify(')
+            ? 'json'
+            : 'unknown';
+          const requestBody = content.includes('request.json')
+            ? 'json'
+            : content.includes('request.form')
+              ? 'form-data'
+              : content.includes('request.files')
+                ? 'file-upload'
+                : null;
+
+          endpoints.push({
+            controller: path.basename(filePath, '.py'),
+            route: `${methods.join(',')} ${route}`,
+            methodName: functionName,
+            requestParams: {
+              ...functionParams,
+              ...Object.fromEntries(routeParams.map((p) => [p.name, p])),
+            },
+            responseDto: { type: responseType },
+            docstring,
+            framework: 'flask',
+            requestBody,
+            statusCodes: [200], // Default, can be enhanced
+          });
           break;
         }
       }
+      continue;
+    }
 
-      methods.forEach((method) => {
-        endpoints.push({
-          controller: path.basename(filePath, '.py'),
-          route: `${method} ${route}`,
-          methodName: functionName,
-          requestParams: functionParams,
-          responseDto: parseFlaskResponse(content, functionName),
-          docstring,
-          framework: 'flask',
+    // Traditional Flask route decorator pattern
+    const routeMatch = line.match(
+      /@(\w+)\.route\s*\(\s*['"]([^'"]+)['"](?:.*methods\s*=\s*\[([^\]]+)\])?/,
+    );
+    if (routeMatch) {
+      const route = routeMatch[2];
+      const methods = routeMatch[3]
+        ? routeMatch[3]
+            .split(',')
+            .map((m) => m.trim().replace(/['"]/g, '').toUpperCase())
+        : ['GET'];
+
+      // Parse route parameters (e.g. <int:id>)
+      const routeParams: any[] = [];
+      const paramMatches = route.matchAll(/<([^:>]+:)?([^>]+)>/g);
+      for (const match of paramMatches) {
+        routeParams.push({
+          name: match[2],
+          type: match[1] ? match[1].replace(':', '') : 'string',
+          in: 'path',
         });
-      });
+      }
+
+      // Find the function definition
+      let functionName = '';
+      let functionParams: any = {};
+      let docstring = '';
+
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j].trim();
+        const funcMatch = nextLine.match(/^def\s+(\w+)\s*\(([^)]*)\)/);
+
+        if (funcMatch) {
+          functionName = funcMatch[1];
+          functionParams = parseFlaskParams(funcMatch[2]);
+
+          // Extract docstring if present
+          if (j + 1 < lines.length && lines[j + 1].trim().startsWith('"""')) {
+            docstring = extractDocstring(lines, j + 1);
+          }
+
+          // Analyze function body
+          const responseType = content.includes('jsonify(')
+            ? 'json'
+            : 'unknown';
+          const requestBody = content.includes('request.json')
+            ? 'json'
+            : content.includes('request.form')
+              ? 'form-data'
+              : content.includes('request.files')
+                ? 'file-upload'
+                : null;
+
+          endpoints.push({
+            controller: path.basename(filePath, '.py'),
+            route: `${methods.join(',')} ${route}`,
+            methodName: functionName,
+            requestParams: {
+              ...functionParams,
+              ...Object.fromEntries(routeParams.map((p) => [p.name, p])),
+            },
+            responseDto: { type: responseType },
+            docstring,
+            framework: 'flask',
+            requestBody,
+            statusCodes: [200], // Default, can be enhanced
+          });
+          break;
+        }
+      }
     }
   }
 
@@ -199,33 +277,298 @@ function parseFastApiEndpoints(content: string, filePath: string): any[] {
 function parseDjangoEndpoints(content: string, filePath: string): any[] {
   const endpoints: any[] = [];
 
-  // Django URL patterns are typically in urls.py files
-  if (path.basename(filePath) === 'urls.py') {
-    const lines = content.split('\n');
+  // Match Django URL patterns with docstrings
+  const urlPattern =
+    /(?:path|re_path)\(\s*['"]([^'"]+)['"],\s*([^,)]+)(?:,\s*name\s*=\s*['"]([^'"]+)['"])?/g;
 
-    for (const line of lines) {
-      const urlMatch = line.match(
-        /path\s*\(\s*['"]([^'"]+)['"].*?(\w+)\.(\w+)/,
+  // Match view functions/classes with docstrings
+  const viewDefPattern =
+    /(?:def\s+(\w+)\(|class\s+(\w+)\([^\)]*\)\s*:)[^\n]*\n\s*"""([\s\S]*?)"""/g;
+
+  // Extract all views first
+  const views = new Map<string, { docstring?: string; methods?: string[] }>();
+  let viewMatch;
+  while ((viewMatch = viewDefPattern.exec(content)) !== null) {
+    const viewName = viewMatch[1] || viewMatch[2];
+    const docstring = viewMatch[3]?.trim();
+    views.set(viewName, { docstring });
+  }
+
+  // Process URL patterns
+  let urlMatch;
+  while ((urlMatch = urlPattern.exec(content)) !== null) {
+    const path = urlMatch[1] || '/undefined-path';
+    const viewRef = urlMatch[2].trim();
+    const name = urlMatch[3];
+
+    if (!path || path === '/undefined-path') continue;
+
+    // Extract view name (handling both direct and dotted references)
+    const viewName = viewRef.split('.').pop()?.replace(/\)$/, '') || '';
+    const viewInfo = views.get(viewName) || {};
+
+    // Determine HTTP methods from view name/path
+    let methods = ['GET'];
+    if (/(create|register|add|post)/i.test(path)) methods = ['POST'];
+    else if (/(edit|update|put)/i.test(path)) methods = ['PUT', 'PATCH'];
+    else if (/(delete|remove)/i.test(path)) methods = ['DELETE'];
+
+    // Extract path parameters
+    const parameters = [...path.matchAll(/<(?:(\w+):)?(\w+)>/g)].map(
+      (match) => ({
+        name: match[2],
+        type: match[1] || 'str',
+        in: 'path',
+        required: true,
+      }),
+    );
+
+    endpoints.push({
+      path,
+      methods,
+      name,
+      file: filePath,
+      framework: 'django',
+      description: viewInfo.docstring,
+      parameters,
+      view: viewRef,
+    });
+  }
+
+  return endpoints;
+}
+
+function parseDjangoModels(content: string, filePath: string): any[] {
+  const models: any[] = [];
+
+  // Skip if not models.py
+  if (!filePath.endsWith('models.py')) return models;
+
+  const lines = content.split('\n');
+  let currentModel: string | null = null;
+  const currentFields: Record<string, any> = {};
+
+  lines.forEach((line) => {
+    // Model class detection
+    const modelMatch = line.match(/class\s+(\w+)\(\s*models\.Model\):/);
+    if (modelMatch) {
+      currentModel = modelMatch[1];
+      models.push({
+        name: currentModel,
+        type: 'django-model',
+        fields: {},
+        file: filePath,
+      });
+      return;
+    }
+
+    // Field detection
+    if (currentModel) {
+      const fieldMatch = line.match(/(\w+)\s*=\s*models\.(\w+)\(([^)]*)/);
+      if (fieldMatch) {
+        const [_, name, type, args] = fieldMatch;
+        models.find((m) => m.name === currentModel)!.fields[name] = {
+          type,
+          args: args
+            .split(',')
+            .map((a) => a.trim())
+            .filter((a) => a),
+        };
+      }
+    }
+  });
+
+  return models;
+}
+
+function parseSqlAlchemyModels(content: string, filePath: string): any[] {
+  const models: any[] = [];
+  const lines = content.split('\n');
+  let currentModel: string | null = null;
+
+  // Extended type mapping
+  const typeMapping: Record<string, string> = {
+    Integer: 'Integer',
+    String: 'String',
+    Text: 'Text',
+    DateTime: 'DateTime',
+    Boolean: 'Boolean',
+    Float: 'Float',
+    JSON: 'JSON',
+    ARRAY: 'ARRAY',
+    Enum: 'Enum',
+    LargeBinary: 'LargeBinary',
+  };
+
+  lines.forEach((line) => {
+    // SQLAlchemy model detection
+    const modelMatch = line.match(/class\s+(\w+)\(\s*Base\)/);
+    if (modelMatch) {
+      currentModel = modelMatch[1];
+      models.push({
+        name: currentModel,
+        type: 'sqlalchemy-model',
+        fields: {},
+        file: filePath,
+      });
+      return;
+    }
+
+    // Enhanced field detection
+    if (currentModel) {
+      const fieldMatch = line.match(
+        /(\w+)\s*=\s*(Column|relationship)\(([^)]*)/,
       );
+      if (fieldMatch) {
+        const [_, name, decorator, args] = fieldMatch;
 
-      if (urlMatch) {
-        const route = urlMatch[1];
-        const viewModule = urlMatch[2];
-        const viewFunction = urlMatch[3];
+        // Detect type from args
+        let type = 'Unknown';
+        for (const [key, value] of Object.entries(typeMapping)) {
+          if (args.includes(key)) {
+            type = value;
+            break;
+          }
+        }
 
-        endpoints.push({
-          controller: viewModule,
-          route: `* /${route}`, // Django doesn't specify HTTP method in URL patterns
-          methodName: viewFunction,
-          requestParams: {},
-          responseDto: null,
-          framework: 'django',
-        });
+        models.find((m) => m.name === currentModel)!.fields[name] = {
+          type: decorator === 'relationship' ? 'Relationship' : type,
+          args: args
+            .split(',')
+            .map((a) => a.trim())
+            .filter((a) => a && !a.includes(type)),
+        };
+      }
+    }
+  });
+
+  return models;
+}
+
+function parseDjangoRestSerializers(content: string, filePath: string): any[] {
+  const serializers: any[] = [];
+
+  // Only process files likely to contain serializers
+  if (
+    !filePath.includes('serializers.py') &&
+    !filePath.includes('api/serializers')
+  ) {
+    return serializers;
+  }
+
+  const lines = content.split('\n');
+  let currentSerializer: string | null = null;
+
+  for (const line of lines) {
+    // Skip comments and empty lines
+    if (line.trim().startsWith('#') || line.trim() === '') continue;
+
+    // Detect serializer class definition
+    const serializerMatch = line.match(
+      /class\s+(\w+)\(\s*(?:rest_framework\.)?serializers\.(\w+)/,
+    );
+    if (serializerMatch) {
+      currentSerializer = serializerMatch[1];
+      serializers.push({
+        name: currentSerializer,
+        type: 'django-serializer',
+        serializerType: serializerMatch[2], // ModelSerializer, Serializer, etc.
+        fields: {},
+        model: null,
+      });
+      continue;
+    }
+
+    // Parse serializer fields
+    if (currentSerializer) {
+      const serializer = serializers.find((s) => s.name === currentSerializer);
+
+      // Detect model reference in ModelSerializer
+      const modelMatch = line.match(/model\s*=\s*(\w+)/);
+      if (modelMatch) {
+        serializer.model = modelMatch[1];
+      }
+
+      // Parse field definitions
+      const fieldMatch = line.match(
+        /(\w+)\s*=\s*(?:serializers|fields)\.(\w+)\(([^)]*)\)/,
+      );
+      if (fieldMatch) {
+        const [_, fieldName, fieldType, fieldArgs] = fieldMatch;
+        serializer.fields[fieldName] = {
+          type: fieldType,
+          ...parseFieldArgs(fieldArgs),
+        };
+      }
+
+      // Parse inline field declarations (e.g., field = CharField())
+      const inlineFieldMatch = line.match(/(\w+)\s*=\s*(\w+)\(([^)]*)\)/);
+      if (inlineFieldMatch && !line.includes('class ')) {
+        const [_, fieldName, fieldType, fieldArgs] = inlineFieldMatch;
+        serializer.fields[fieldName] = {
+          type: fieldType,
+          ...parseFieldArgs(fieldArgs),
+        };
       }
     }
   }
 
-  return endpoints;
+  return serializers;
+}
+
+function detectAlembicMigrations(projectPath: string): any[] {
+  try {
+    const migrationFiles = fs
+      .readdirSync(path.join(projectPath, 'alembic/versions'))
+      .filter((file) => file.endsWith('.py') && file.match(/^\d+_.+\.py$/));
+
+    return migrationFiles.map((file) => ({
+      type: 'alembic-migration',
+      file: path.join('alembic/versions', file),
+      description: file.split('_').slice(1).join('_').replace('.py', ''),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function parseFieldArgs(args: string): Record<string, any> {
+  const result: Record<string, any> = {};
+
+  // Handle both positional and keyword arguments
+  args.split(',').forEach((arg) => {
+    arg = arg.trim();
+    if (!arg) return;
+
+    // Positional argument (e.g. 'to="app.Model"')
+    if (arg.includes('=')) {
+      const [key, val] = arg.split('=').map((s) => s.trim());
+      result[key] = parseArgValue(val);
+    }
+    // First positional argument is typically the related model
+    else if (!result['to'] && !result['model']) {
+      result['to'] = parseArgValue(arg);
+    }
+  });
+
+  return result;
+}
+
+function parseArgValue(val: string): any {
+  val = val.replace(/['"]/g, '');
+
+  // Handle boolean values
+  if (val === 'True') return true;
+  if (val === 'False') return false;
+
+  // Handle numeric values
+  if (/^\d+$/.test(val)) return parseInt(val);
+  if (/^\d+\.\d+$/.test(val)) return parseFloat(val);
+
+  // Handle None
+  if (val === 'None') return null;
+
+  return val;
 }
 
 function parseFlaskParams(paramString: string): any {
@@ -506,4 +849,26 @@ function extractTypeFieldsByType(
     name: classDecl.getName() || typeText,
     fields,
   };
+}
+
+export function parsePythonApis(projectPath: string): any[] {
+  const endpoints: any[] = [];
+
+  // Find all Python files in the project
+  const pythonFiles = findPythonFiles(projectPath);
+
+  // Parse each file for API endpoints
+  pythonFiles.forEach((filePath) => {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      endpoints.push(...parsePythonFile(content, filePath));
+    } catch (error) {
+      console.error(`Error parsing ${filePath}:`, error);
+    }
+  });
+
+  // Add any detected migrations
+  endpoints.push(...detectAlembicMigrations(projectPath));
+
+  return endpoints;
 }

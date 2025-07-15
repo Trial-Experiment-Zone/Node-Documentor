@@ -17,7 +17,11 @@
     "forceConsistentCasingInFileNames": false,
     "noImplicitAny": false,
     "strictBindCallApply": false,
-    "noFallthroughCasesInSwitch": false
+    "noFallthroughCasesInSwitch": false,
+    "paths": {
+      "@parsers/*": ["src/parsers/*"],
+      "@generators/*": ["src/generators/*"]
+    }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules"]

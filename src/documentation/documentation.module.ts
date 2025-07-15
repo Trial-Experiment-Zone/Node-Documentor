@@ -3,6 +3,7 @@ import { MarkdownGeneratorService } from '../generators/markdown-generator.servi
 import { ErdGeneratorService } from '../generators/erd-generator.service';
 import { DocumentationController } from './documentation.controller';
 import { DocumentationService } from './documentation.service';
+import { PythonApiParserService } from '../scripts/python-api-parser.service';
 
 @Module({
   controllers: [DocumentationController],
@@ -10,6 +11,8 @@ import { DocumentationService } from './documentation.service';
     DocumentationService,
     ErdGeneratorService,
     MarkdownGeneratorService,
+    PythonApiParserService,
   ],
+  exports: [PythonApiParserService]
 })
 export class DocumentationModule {}
