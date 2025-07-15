@@ -29,10 +29,12 @@ export interface FunctionInfo {
 
 // The complete parsed data from any analyzer
 export interface ParsedProjectData {
+  name: string;
+  description?: string;
   entities: ClassInfo[];
   classes: ClassInfo[];
   functions: FunctionInfo[];
-  relationships?: EntityRelationship[]; // ✅ Optional support
+  relationships?: EntityRelationship[]; // Optional support
 }
 
 // Data needed to build the ERD
@@ -46,6 +48,13 @@ export interface IdentifiedFlow {
   keyword: string;
   filePath: string;
   relevantCode: string;
+}
+
+export interface FlowSummary {
+  type: string;
+  resource: string;
+  description: string;
+  endpoints: string[];
 }
 
 // --- WebSocket Types ---

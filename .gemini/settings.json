@@ -1,5 +1,7 @@
 {
   // "model": "gemini-2.5-pro",
+  // "temperature": 0.0,
+  // "maxTokens": 8192,
   "allowedTools": [
     "read-file",
     "write-file",
@@ -9,5 +11,14 @@
     "**/node_modules/**",
     "**/dist/**",
     "**/.git/**"
-  ]
+  ],
+  "toolTimeouts": {
+    "read-file": 5,
+    "search-text": 10,
+    "write-file": 10
+  },
+  "logging": {
+    "level": "info",
+    "destination": "console"
+  }
 }

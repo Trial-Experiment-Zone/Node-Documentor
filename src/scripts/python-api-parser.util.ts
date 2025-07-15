@@ -72,13 +72,19 @@ function parsePythonFile(filePath: string): any[] {
   const content = fs.readFileSync(filePath, 'utf-8');
   const endpoints: any[] = [];
 
-  // Parse different Python web frameworks
+  if (filePath.includes('urls.py') || filePath.includes('/urls/')) {
+    endpoints.push(...parseDjangoEndpoints(content, filePath));
+  }
+  
+  if (filePath.endsWith('models.py')) {
+    endpoints.push(...parseDjangoModels(content, filePath));
+  }
+
+  // Existing parsing for other frameworks
   const flaskEndpoints = parseFlaskEndpoints(content, filePath);
   const fastApiEndpoints = parseFastApiEndpoints(content, filePath);
-  const djangoEndpoints = parseDjangoEndpoints(content, filePath);
-
-  endpoints.push(...flaskEndpoints, ...fastApiEndpoints, ...djangoEndpoints);
-
+  
+  endpoints.push(...flaskEndpoints, ...fastApiEndpoints);
   return endpoints;
 }
 
@@ -89,18 +95,24 @@ function parseFlaskEndpoints(content: string, filePath: string): any[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
 
-    // Flask route decorator pattern: @app.route('/path', methods=['GET'])
-    const routeMatch = line.match(
-      /@(?:app|bp|blueprint)\.route\s*\(\s*['"]([^'"]+)['"](?:.*methods\s*=\s*\[([^\]]+)\])?/,
+    // Modern Flask route decorator pattern
+    const methodRouteMatch = line.match(
+      /@(\w+)\.(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]/,
     );
+    if (methodRouteMatch) {
+      const route = methodRouteMatch[3];
+      const methods = [methodRouteMatch[2].toUpperCase()];
 
-    if (routeMatch) {
-      const route = routeMatch[1];
-      const methods = routeMatch[2]
-        ? routeMatch[2]
-            .split(',')
-            .map((m) => m.trim().replace(/['"]/g, '').toUpperCase())
-        : ['GET'];
+      // Parse route parameters (e.g. <int:id>)
+      const routeParams: any[] = [];
+      const paramMatches = route.matchAll(/<([^:>]+:)?([^>]+)>/g);
+      for (const match of paramMatches) {
+        routeParams.push({
+          name: match[2],
+          type: match[1] ? match[1].replace(':', '') : 'string',
+          in: 'path',
+        });
+      }
 
       // Find the function definition
       let functionName = '';
@@ -113,28 +125,115 @@ function parseFlaskEndpoints(content: string, filePath: string): any[] {
 
         if (funcMatch) {
           functionName = funcMatch[1];
-          const params = funcMatch[2];
-          functionParams = parseFlaskParams(params);
+          functionParams = parseFlaskParams(funcMatch[2]);
 
           // Extract docstring if present
           if (j + 1 < lines.length && lines[j + 1].trim().startsWith('"""')) {
             docstring = extractDocstring(lines, j + 1);
           }
+
+          // Analyze function body
+          const responseType = content.includes('jsonify(')
+            ? 'json'
+            : 'unknown';
+          const requestBody = content.includes('request.json')
+            ? 'json'
+            : content.includes('request.form')
+              ? 'form-data'
+              : content.includes('request.files')
+                ? 'file-upload'
+                : null;
+
+          endpoints.push({
+            controller: path.basename(filePath, '.py'),
+            route: `${methods.join(',')} ${route}`,
+            methodName: functionName,
+            requestParams: {
+              ...functionParams,
+              ...Object.fromEntries(routeParams.map((p) => [p.name, p])),
+            },
+            responseDto: { type: responseType },
+            docstring,
+            framework: 'flask',
+            requestBody,
+            statusCodes: [200], // Default, can be enhanced
+          });
           break;
         }
       }
+      continue;
+    }
 
-      methods.forEach((method) => {
-        endpoints.push({
-          controller: path.basename(filePath, '.py'),
-          route: `${method} ${route}`,
-          methodName: functionName,
-          requestParams: functionParams,
-          responseDto: parseFlaskResponse(content, functionName),
-          docstring,
-          framework: 'flask',
+    // Traditional Flask route decorator pattern
+    const routeMatch = line.match(
+      /@(\w+)\.route\s*\(\s*['"]([^'"]+)['"](?:.*methods\s*=\s*\[([^\]]+)\])?/,
+    );
+    if (routeMatch) {
+      const route = routeMatch[2];
+      const methods = routeMatch[3]
+        ? routeMatch[3]
+            .split(',')
+            .map((m) => m.trim().replace(/['"]/g, '').toUpperCase())
+        : ['GET'];
+
+      // Parse route parameters (e.g. <int:id>)
+      const routeParams: any[] = [];
+      const paramMatches = route.matchAll(/<([^:>]+:)?([^>]+)>/g);
+      for (const match of paramMatches) {
+        routeParams.push({
+          name: match[2],
+          type: match[1] ? match[1].replace(':', '') : 'string',
+          in: 'path',
         });
-      });
+      }
+
+      // Find the function definition
+      let functionName = '';
+      let functionParams: any = {};
+      let docstring = '';
+
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j].trim();
+        const funcMatch = nextLine.match(/^def\s+(\w+)\s*\(([^)]*)\)/);
+
+        if (funcMatch) {
+          functionName = funcMatch[1];
+          functionParams = parseFlaskParams(funcMatch[2]);
+
+          // Extract docstring if present
+          if (j + 1 < lines.length && lines[j + 1].trim().startsWith('"""')) {
+            docstring = extractDocstring(lines, j + 1);
+          }
+
+          // Analyze function body
+          const responseType = content.includes('jsonify(')
+            ? 'json'
+            : 'unknown';
+          const requestBody = content.includes('request.json')
+            ? 'json'
+            : content.includes('request.form')
+              ? 'form-data'
+              : content.includes('request.files')
+                ? 'file-upload'
+                : null;
+
+          endpoints.push({
+            controller: path.basename(filePath, '.py'),
+            route: `${methods.join(',')} ${route}`,
+            methodName: functionName,
+            requestParams: {
+              ...functionParams,
+              ...Object.fromEntries(routeParams.map((p) => [p.name, p])),
+            },
+            responseDto: { type: responseType },
+            docstring,
+            framework: 'flask',
+            requestBody,
+            statusCodes: [200], // Default, can be enhanced
+          });
+          break;
+        }
+      }
     }
   }
 
@@ -198,34 +297,187 @@ function parseFastApiEndpoints(content: string, filePath: string): any[] {
 
 function parseDjangoEndpoints(content: string, filePath: string): any[] {
   const endpoints: any[] = [];
+  
+  // Match both path() and re_path() patterns
+  const urlPattern = /(?:path|re_path)\(['"]([^'"]+)['"],\s*([^,)]+)/g;
+  
+  let match;
+  while ((match = urlPattern.exec(content)) !== null) {
+    const path = match[1] || '/undefined-path';
+    const viewName = match[2].trim();
+    
+    // Skip if path is empty
+    if (!path || path === '/undefined-path') continue;
+    
+    // Determine HTTP methods
+    let methods = ['GET'];
+    if (/create|register|add|post/i.test(path)) methods = ['POST'];
+    else if (/edit|update|put/i.test(path)) methods = ['PUT', 'PATCH'];
+    else if (/delete|remove/i.test(path)) methods = ['DELETE'];
+    
+    endpoints.push({
+      path,
+      methods,
+      file: filePath,
+      framework: 'django',
+      parameters: path.match(/<\w+:\w+>/g)?.map(p => ({
+        name: p.replace(/[<>]/g, '').split(':')[1],
+        type: p.replace(/[<>]/g, '').split(':')[0]
+      })) || []
+    });
+  }
+  
+  return endpoints;
+}
 
-  // Django URL patterns are typically in urls.py files
-  if (path.basename(filePath) === 'urls.py') {
-    const lines = content.split('\n');
+function parseDjangoModels(content: string, filePath: string): any[] {
+  const models: any[] = [];
+  
+  // Skip if not models.py
+  if (!filePath.endsWith('models.py')) return models;
+  
+  const lines = content.split('\n');
+  let currentModel: string | null = null;
+  let currentFields: Record<string, any> = {};
+  
+  lines.forEach(line => {
+    // Model class detection
+    const modelMatch = line.match(/class\s+(\w+)\(\s*models\.Model\):/);
+    if (modelMatch) {
+      currentModel = modelMatch[1];
+      models.push({
+        name: currentModel,
+        type: 'django-model',
+        fields: {},
+        file: filePath
+      });
+      return;
+    }
+    
+    // Field detection
+    if (currentModel) {
+      const fieldMatch = line.match(/(\w+)\s*=\s*models\.(\w+)\(([^)]*)/);
+      if (fieldMatch) {
+        const [_, name, type, args] = fieldMatch;
+        models.find(m => m.name === currentModel)!.fields[name] = {
+          type,
+          args: args.split(',').map(a => a.trim()).filter(a => a)
+        };
+      }
+    }
+  });
+  
+  return models;
+}
 
-    for (const line of lines) {
-      const urlMatch = line.match(
-        /path\s*\(\s*['"]([^'"]+)['"].*?(\w+)\.(\w+)/,
+function parseDjangoRestSerializers(content: string, filePath: string): any[] {
+  const serializers: any[] = [];
+
+  // Only process files likely to contain serializers
+  if (
+    !filePath.includes('serializers.py') &&
+    !filePath.includes('api/serializers')
+  ) {
+    return serializers;
+  }
+
+  const lines = content.split('\n');
+  let currentSerializer: string | null = null;
+
+  for (const line of lines) {
+    // Skip comments and empty lines
+    if (line.trim().startsWith('#') || line.trim() === '') continue;
+
+    // Detect serializer class definition
+    const serializerMatch = line.match(
+      /class\s+(\w+)\(\s*(?:rest_framework\.)?serializers\.(\w+)/,
+    );
+    if (serializerMatch) {
+      currentSerializer = serializerMatch[1];
+      serializers.push({
+        name: currentSerializer,
+        type: 'django-serializer',
+        serializerType: serializerMatch[2], // ModelSerializer, Serializer, etc.
+        fields: {},
+        model: null,
+      });
+      continue;
+    }
+
+    // Parse serializer fields
+    if (currentSerializer) {
+      const serializer = serializers.find((s) => s.name === currentSerializer);
+
+      // Detect model reference in ModelSerializer
+      const modelMatch = line.match(/model\s*=\s*(\w+)/);
+      if (modelMatch) {
+        serializer.model = modelMatch[1];
+      }
+
+      // Parse field definitions
+      const fieldMatch = line.match(
+        /(\w+)\s*=\s*(?:serializers|fields)\.(\w+)\(([^)]*)\)/,
       );
+      if (fieldMatch) {
+        const [_, fieldName, fieldType, fieldArgs] = fieldMatch;
+        serializer.fields[fieldName] = {
+          type: fieldType,
+          ...parseFieldArgs(fieldArgs),
+        };
+      }
 
-      if (urlMatch) {
-        const route = urlMatch[1];
-        const viewModule = urlMatch[2];
-        const viewFunction = urlMatch[3];
-
-        endpoints.push({
-          controller: viewModule,
-          route: `* /${route}`, // Django doesn't specify HTTP method in URL patterns
-          methodName: viewFunction,
-          requestParams: {},
-          responseDto: null,
-          framework: 'django',
-        });
+      // Parse inline field declarations (e.g., field = CharField())
+      const inlineFieldMatch = line.match(/(\w+)\s*=\s*(\w+)\(([^)]*)\)/);
+      if (inlineFieldMatch && !line.includes('class ')) {
+        const [_, fieldName, fieldType, fieldArgs] = inlineFieldMatch;
+        serializer.fields[fieldName] = {
+          type: fieldType,
+          ...parseFieldArgs(fieldArgs),
+        };
       }
     }
   }
 
-  return endpoints;
+  return serializers;
+}
+
+function parseFieldArgs(args: string): Record<string, any> {
+  const result: Record<string, any> = {};
+
+  // Handle both positional and keyword arguments
+  args.split(',').forEach((arg) => {
+    arg = arg.trim();
+    if (!arg) return;
+
+    // Positional argument (e.g. 'to="app.Model"')
+    if (arg.includes('=')) {
+      const [key, val] = arg.split('=').map((s) => s.trim());
+      result[key] = parseArgValue(val);
+    }
+    // First positional argument is typically the related model
+    else if (!result['to'] && !result['model']) {
+      result['to'] = parseArgValue(arg);
+    }
+  });
+
+  return result;
+}
+
+function parseArgValue(val: string): any {
+  val = val.replace(/['"]/g, '');
+
+  // Handle boolean values
+  if (val === 'True') return true;
+  if (val === 'False') return false;
+
+  // Handle numeric values
+  if (/^\d+$/.test(val)) return parseInt(val);
+  if (/^\d+\.\d+$/.test(val)) return parseFloat(val);
+
+  // Handle None
+  if (val === 'None') return null;
+
+  return val;
 }
 
 function parseFlaskParams(paramString: string): any {

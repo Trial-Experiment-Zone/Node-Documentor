@@ -10,16 +10,14 @@ import * as glob from 'glob';
 import * as path from 'path';
 import { generateApiDoc } from 'src/scripts/api-parser.util';
 import { analyzeProjectFlows } from 'src/scripts/flow-analyzer.util';
+import { IdentifiedFlow, FlowSummary } from '../common/types';
 import { generatePythonApiDoc } from 'src/scripts/python-api-parser.util';
 import { parseWebSockets } from 'src/scripts/websocket-parser.util';
 import tree from 'tree-node-cli';
-import {
-  ParsedProjectData,
-  IdentifiedFlow,
-  SocketGatewayInfo,
-} from '../common/types';
+import { ParsedProjectData, SocketGatewayInfo } from '../common/types';
 import { ErdGeneratorService } from '../generators/erd-generator.service';
 import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
+import { parseGoEndpoints } from 'src/scripts/go-api-parser.util';
 
 @Injectable()
 export class DocumentationService {
@@ -28,7 +26,7 @@ export class DocumentationService {
   constructor(
     private readonly configService: ConfigService,
     private readonly erdGenerator: ErdGeneratorService,
-    private readonly markdownGenerator: MarkdownGeneratorService, // Changed
+    private readonly markdownGenerator: MarkdownGeneratorService,
   ) {
     const relativePath = this.configService.get<string>(
       'GO_PARSER_PATH',
@@ -55,7 +53,7 @@ export class DocumentationService {
         }
       } else if (await this.isPythonProject(projectPath)) {
         try {
-          apiDocs = generatePythonApiDoc(projectPath); // Call the new placeholder function
+          apiDocs = generatePythonApiDoc(projectPath);
           console.log(
             'Python project detected. Attempting Python API doc generation.',
           );
@@ -64,6 +62,14 @@ export class DocumentationService {
           // Example: parsedData.relationships = extractPythonRelationships(projectPath);
         } catch (e) {
           console.error('Failed to generate API docs from source (Python):', e);
+          apiDocs = [];
+        }
+      } else if (this.isGoProject(projectPath)) {
+        try {
+          apiDocs = parseGoEndpoints(projectPath);
+          console.log('Go (Gin) project detected. Generated API docs from router files.');
+        } catch (e) {
+          console.error('Failed to generate API docs from source (Go):', e);
           apiDocs = [];
         }
       } else {
@@ -78,7 +84,9 @@ export class DocumentationService {
       exclude: [/node_modules/, /dist/, /\.git/, /output/],
     });
 
-    const projectName = path.basename(projectPath);
+    const projectName = parsedData.name || path.basename(projectPath);
+    const projectDescription =
+      parsedData.description || 'No description available';
     const outputDir = path.resolve(process.cwd(), 'output', projectName);
     await fs.promises.mkdir(outputDir, { recursive: true });
 
@@ -88,30 +96,48 @@ export class DocumentationService {
     );
 
     // Only analyze flows and sockets for TypeScript projects
-    let flows: IdentifiedFlow[] = [];
     let webSocketInfo: SocketGatewayInfo[] = [];
+    let keywordFlows: IdentifiedFlow[] = [];
+    let flowSummaries: FlowSummary[] = [];
+
     if (this.isTypeScriptProject(projectPath)) {
-      flows = analyzeProjectFlows(projectPath);
+      const analysisResults = analyzeProjectFlows(projectPath);
+
+      // Strictly separate the two flow types
+      keywordFlows = analysisResults.filter(
+        (result): result is IdentifiedFlow => 'keyword' in result,
+      );
+
+      flowSummaries = analysisResults.filter(
+        (result): result is FlowSummary => 'type' in result,
+      );
+
       webSocketInfo = parseWebSockets(projectPath);
     }
 
     // Generate Markdown content
-    const markdownContent = this.markdownGenerator.generate(
-      projectName,
-      parsedData,
-      folderTree,
-      erdMermaidCode,
+    const databaseTables = parsedData.entities || [];
+    const formattedTables = databaseTables
+      .map(table => `${table.name}\n${table.properties?.map(p => `- ${p.name}: ${p.type}`).join('\n') || 'No columns'}`)
+      .join('\n\n');
+
+    const markdown = this.markdownGenerator.generate(
       apiDocs,
-      flows,
+      keywordFlows,
+      flowSummaries,
       webSocketInfo,
+      apiDocs.filter(d => d.type === 'django-model'),
+      erdMermaidCode,
+      formattedTables,
+      folderTree,
+      projectDescription
     );
 
-    // Save the Markdown file
+    // Include formattedTables in the final markdown content
+    const finalMarkdown = `${markdown}\n\n${formattedTables}`;
     const filePath = path.join(outputDir, `${projectName}-documentation.md`);
-    await fs.promises.writeFile(filePath, markdownContent);
-
-    // Return the markdown content as a buffer
-    return Buffer.from(markdownContent, 'utf-8');
+    await fs.promises.writeFile(filePath, finalMarkdown);
+    return Buffer.from(finalMarkdown, 'utf-8');
   }
 
   private findAndParseApiSpec(projectPath: string): any[] | null {
@@ -121,7 +147,7 @@ export class DocumentationService {
       if (fs.existsSync(filePath)) {
         try {
           const fileContent = fs.readFileSync(filePath, 'utf-8');
-          return JSON.parse(fileContent); // Return the raw spec
+          return JSON.parse(fileContent);
         } catch (e) {
           console.error(`Error parsing API spec file ${fileName}:`, e);
           return null;
@@ -182,5 +208,26 @@ export class DocumentationService {
       path.join(projectPath, 'pyproject.toml'),
     );
     return pythonFiles.length > 0 || hasRequirementsTxt || hasPyprojectToml;
+  }
+
+  private isGoProject(projectPath: string): boolean {
+    try {
+      const files = fs.readdirSync(projectPath);
+      return files.some(file => 
+        file === 'go.mod' || 
+        file.endsWith('.go') || 
+        fs.existsSync(path.join(projectPath, 'go.sum'))
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private processKeywordFlows(flows: IdentifiedFlow[]): void {
+    // Implementation using only IdentifiedFlow properties
+  }
+
+  private processFlowSummaries(summaries: FlowSummary[]): void {
+    // Implementation using only FlowSummary properties
   }
 }
