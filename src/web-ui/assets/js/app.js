@@ -1,101 +1,104 @@
-/* src/web-ui/assets/js/app.js */
-const config = {
-  apiBaseUrl: 'http://localhost:3000'
-};
+// src/web-ui/assets/js/app.js
+const config = { apiBaseUrl: 'http://localhost:3000' };
+
+let currentDoc = null;
+let lastDocContent = '';
+let dualView = false;
 
 //
 // File-Manager: List / view / delete / rename
 //
 
-// 1. Load directory listing (root or sub-folder)
 async function loadProjectStructure(folder = '') {
   try {
     const res = await fetch(`${config.apiBaseUrl}/file-manager/list?folder=${encodeURIComponent(folder)}`);
     const items = await res.json();
-    renderFileTree(items, document.getElementById('file-tree'));
-  } catch (err) {
-    console.error('Error loading project structure:', err);
-    document.getElementById('file-tree').innerHTML =
-      '<div class="text-red-400 p-4">Error loading project structure</div>';
+    renderFileTree(items);
+  } catch {
+    document.getElementById('file-tree').innerHTML = '<div class="text-danger p-2">Error loading structure</div>';
   }
 }
 
-// 2. Render the tree into a nested list
-function renderFileTree(items, parent) {
-  parent.innerHTML = '';
-  const ul = document.createElement('ul');
+function renderFileTree(items) {
+  const container = document.getElementById('file-tree');
+  container.innerHTML = '';
   items.forEach(item => {
-    const li = document.createElement('li');
-    li.className = 'p-2 hover:bg-primary-700 cursor-pointer flex justify-between items-center';
-    const span = document.createElement('span');
-    span.textContent = item.name;
-    span.className = item.isDirectory ? 'font-bold' : '';
-    span.addEventListener('click', () => {
-      item.isDirectory ? loadProjectStructure(item.path) : loadFileContent(item.path);
-    });
-    li.appendChild(span);
+    const li = document.createElement('div');
+    li.className = 'list-group-item d-flex justify-content-between align-items-center';
+    li.textContent = item.name;
+    li.onclick = () => {
+      if (item.isDirectory) loadProjectStructure(item.path);
+      else loadFileContent(item.path);
+    };
 
     if (!item.isDirectory) {
+      const btnGroup = document.createElement('div');
+      btnGroup.className = 'btn-group btn-group-sm';
+
+      // Delete button
       const delBtn = document.createElement('button');
-      delBtn.innerHTML = '🗑';
-      delBtn.className = 'ml-2';
-      delBtn.addEventListener('click', e => {
+      delBtn.className = 'btn btn-outline-danger';
+      delBtn.innerHTML = '<i class="fas fa-trash"></i>';
+      delBtn.title = 'Delete file';
+      delBtn.onclick = e => {
         e.stopPropagation();
         deleteFileManagerItem(item.path, 'file');
-      });
-      li.appendChild(delBtn);
+      };
+
+      // Rename button
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn btn-outline-secondary';
+      editBtn.innerHTML = '<i class="fas fa-edit"></i>';
+      editBtn.title = 'Rename file';
+      editBtn.onclick = e => {
+        e.stopPropagation();
+        const newName = prompt('New file name:', item.name);
+        if (newName) renameFileManagerPath(item.path, newName);
+      };
+
+      btnGroup.append(delBtn, editBtn);
+      li.append(btnGroup);
     }
 
-    ul.appendChild(li);
+    container.append(li);
   });
-  parent.appendChild(ul);
 }
 
-// 3. Load file contents
 async function loadFileContent(path) {
   try {
     const res = await fetch(`${config.apiBaseUrl}/file-manager/content?file=${encodeURIComponent(path)}`);
-    if (!res.ok) throw new Error('Failed to load file');
     const text = await res.text();
     document.getElementById('markdown-content').innerHTML =
-      `<pre class="bg-primary-800 p-4 rounded-lg overflow-x-auto text-blue-400">${escapeHtml(text)}</pre>`;
-  } catch (err) {
-    console.error('Error loading file content:', err);
-    document.getElementById('markdown-content').innerHTML =
-      '<div class="text-red-400 p-4">Error loading file content</div>';
+      `<pre class="bg-light p-3 text-monospace">${escapeHtml(text)}</pre>`;
+  } catch {
+    document.getElementById('markdown-content').innerHTML = '<div class="text-danger p-2">Error loading file</div>';
   }
 }
 
-// 4. Delete a file or folder
 async function deleteFileManagerItem(path, type) {
+  const url = type === 'directory'
+    ? `${config.apiBaseUrl}/file-manager/folder?folder=${encodeURIComponent(path)}`
+    : `${config.apiBaseUrl}/file-manager/file?file=${encodeURIComponent(path)}`;
   try {
-    const url = type === 'directory'
-      ? `${config.apiBaseUrl}/file-manager/folder?folder=${encodeURIComponent(path)}`
-      : `${config.apiBaseUrl}/file-manager/file?file=${encodeURIComponent(path)}`;
-    const res = await fetch(url, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Delete failed');
+    await fetch(url, { method: 'DELETE' });
     loadProjectStructure();
-    showToast(`${type === 'directory' ? 'Folder' : 'File'} deleted`, 'success');
-  } catch (err) {
-    console.error('Delete error:', err);
-    showToast('Error deleting item', 'error');
+    showToast('Deleted', 'success');
+  } catch {
+    showToast('Error deleting', 'danger');
   }
 }
 
-// 5. Rename (example usage, you'd wire this to a form/button)
-async function renameFileManagerPath(oldPath, newPath) {
+async function renameFileManagerPath(oldPath, newName) {
   try {
-    const res = await fetch(`${config.apiBaseUrl}/file-manager/rename`, {
+    await fetch(`${config.apiBaseUrl}/file-manager/rename`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ oldPath, newPath })
+      body: JSON.stringify({ oldPath, newPath: newName })
     });
-    if (!res.ok) throw new Error('Rename failed');
     loadProjectStructure();
-    showToast('Renamed successfully', 'success');
-  } catch (err) {
-    console.error('Rename error:', err);
-    showToast('Error renaming', 'error');
+    showToast('Renamed', 'success');
+  } catch {
+    showToast('Error renaming', 'danger');
   }
 }
 
@@ -103,118 +106,114 @@ async function renameFileManagerPath(oldPath, newPath) {
 // Documentation: List / view / delete / generate
 //
 
-let currentDoc = null;
-
-// 6. List generated docs
 async function loadDocumentationFiles() {
   try {
     const res = await fetch(`${config.apiBaseUrl}/documentation/files`);
     const files = await res.json();
     renderDocumentationList(files);
-  } catch (err) {
-    console.error('Error loading docs:', err);
-    document.getElementById('output-files').innerHTML =
-      '<div class="text-red-400 p-4">Error loading documentation files</div>';
+  } catch {
+    document.getElementById('output-files').innerHTML = '<div class="text-danger p-2">Error loading docs</div>';
   }
 }
 
-// 7. Render docs list
 function renderDocumentationList(files) {
   const container = document.getElementById('output-files');
   container.innerHTML = '';
   files.forEach(file => {
     const div = document.createElement('div');
-    div.className = 'p-2 hover:bg-primary-700 cursor-pointer flex justify-between';
+    div.className = 'list-group-item d-flex justify-content-between align-items-center';
     div.textContent = file.name;
-    div.addEventListener('click', () => {
-      currentDoc = file.path;
-      document.getElementById('file-title').textContent = file.name;
-      loadDocumentationContent(file.path);
-    });
-    container.appendChild(div);
+    div.onclick = () => loadDocumentationContent(file.path, file.name);
+    container.append(div);
   });
 }
 
-// 8. View a doc
-async function loadDocumentationContent(path) {
+async function loadDocumentationContent(path, name) {
   try {
     const res = await fetch(`${config.apiBaseUrl}/documentation/file?path=${encodeURIComponent(path)}`);
-    if (!res.ok) throw new Error('Failed to load doc');
     const text = await res.text();
-    const contentEl = document.querySelector('#markdown-content .prose');
-    contentEl.innerHTML = marked.parse(text);
-    mermaid.init(undefined, document.querySelectorAll('.mermaid'));
-  } catch (err) {
-    console.error('Error loading doc content:', err);
-    document.getElementById('markdown-content').innerHTML =
-      '<div class="text-red-400 p-4">Error loading documentation content</div>';
+    currentDoc = path;
+    lastDocContent = text;
+    document.getElementById('file-title').textContent = name;
+    renderDocView(text);
+  } catch {
+    document.getElementById('markdown-content').innerHTML = '<div class="text-danger p-2">Error loading doc</div>';
   }
 }
 
-// 9. Delete a doc
+function renderDocView(text) {
+  // Rendered
+  const rendered = document.getElementById('rendered-view');
+  rendered.innerHTML = marked.parse(text);
+  mermaid.init(undefined, rendered.querySelectorAll('.mermaid'));
+
+  // Source
+  const codeView = document.getElementById('code-view');
+  document.getElementById('code-content').textContent = text;
+
+  if (dualView) codeView.classList.remove('d-none');
+  else codeView.classList.add('d-none');
+}
+
+function toggleDualView() {
+  dualView = !dualView;
+  if (lastDocContent) renderDocView(lastDocContent);
+}
+
 async function deleteDocumentationFile() {
-  if (!currentDoc) { showToast('No file selected', 'warning'); return; }
+  if (!currentDoc) return showToast('No file selected', 'warning');
   try {
-    const res = await fetch(`${config.apiBaseUrl}/documentation/file?path=${encodeURIComponent(currentDoc)}`, {
-      method: 'DELETE'
-    });
-    if (!res.ok) throw new Error('Delete failed');
+    await fetch(`${config.apiBaseUrl}/documentation/file?path=${encodeURIComponent(currentDoc)}`, { method: 'DELETE' });
     loadDocumentationFiles();
     document.getElementById('markdown-content').innerHTML = '';
-    showToast('Documentation deleted', 'success');
-  } catch (err) {
-    console.error('Delete doc error:', err);
-    showToast('Error deleting documentation', 'error');
+    showToast('Deleted doc', 'success');
+  } catch {
+    showToast('Error deleting doc', 'danger');
   }
 }
 
-// 10. Generate docs from a folder
 async function generateDocumentation(projectPath) {
   try {
-    const res = await fetch(`${config.apiBaseUrl}/documentation/generate`, {
+    await fetch(`${config.apiBaseUrl}/documentation/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ projectPath })
     });
-    if (!res.ok) throw new Error('Generation failed');
-    showToast('Documentation generated', 'success');
+    showToast('Docs generated', 'success');
     loadDocumentationFiles();
-  } catch (err) {
-    console.error('Generate error:', err);
-    showToast('Error generating documentation', 'error');
+  } catch {
+    showToast('Error generating docs', 'danger');
   }
 }
 
-// Utility: toast & HTML escape
-function showToast(message, type='info') {
-  const t = document.getElementById('toast');
-  t.textContent = message;
-  t.className = `fixed bottom-4 right-4 px-4 py-2 rounded-md shadow-lg text-sm font-medium ${
-    type==='error' ? 'bg-red-900' : type==='success' ? 'bg-green-900' : 'bg-primary-800'
-  }`;
-  t.classList.remove('hidden');
-  setTimeout(() => t.classList.add('hidden'), 3000);
+//
+// Utilities
+//
+
+function showToast(msg, type='info') {
+  const toast = document.createElement('div');
+  toast.className = `alert alert-${type} position-fixed bottom-0 end-0 m-3`;
+  toast.textContent = msg;
+  document.body.append(toast);
+  setTimeout(() => toast.remove(), 3000);
 }
-function escapeHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function escapeHtml(str) {
+  return str.replace(/[&<>"']/g, ch =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[ch]
+  );
 }
 
 // Wire up controls
-document.getElementById('refresh-structure').addEventListener('click', () => loadProjectStructure());
-document.getElementById('refresh-files').addEventListener('click', loadDocumentationFiles);
-document.getElementById('delete-file').addEventListener('click', deleteDocumentationFile);
-document.getElementById('project-upload').addEventListener('change', e => {
+document.getElementById('refresh-structure').onclick = () => loadProjectStructure();
+document.getElementById('refresh-files').onclick     = () => loadDocumentationFiles();
+document.getElementById('delete-file').onclick       = deleteDocumentationFile;
+document.getElementById('toggle-view').onclick       = toggleDualView;
+document.getElementById('project-upload').onchange   = e => {
   const dir = e.target.files[0]?.webkitRelativePath.split('/')[0] || '';
   generateDocumentation(`/${dir}`);
-});
+};
 
-// Initialize both panes
+// Initialize
 loadProjectStructure();
 loadDocumentationFiles();
-
-/*
-  This script now:
-  - Uses `/file-manager/...` endpoints to browse, view, delete and rename project files.
-  - Uses `/documentation/...` endpoints to list, view, delete and generate Markdown docs.
-  - Hooks each button and list item to the correct controller path.  
-*/
