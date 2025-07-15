@@ -3,58 +3,66 @@ import * as fs from 'fs';
 import { Decorator, MethodDeclaration, Project, SyntaxKind } from 'ts-morph';
 import { SocketGatewayInfo, SocketMessageInfo } from '../common/types';
 
-export function parseWebSockets(projectPath: string): SocketGatewayInfo[] {
-  // Only run if tsconfig.json exists in the projectPath
-  const tsConfigPath = path.join(projectPath, 'tsconfig.json');
-  if (!fs.existsSync(tsConfigPath)) {
-    // Not a TypeScript project, skip
-    return [];
-  }
-  const project = new Project({
-    tsConfigFilePath: tsConfigPath,
-    skipAddingFilesFromTsConfig: true,
-  });
-  project.addSourceFilesAtPaths(path.join(projectPath, 'src/**/*.ts'));
-
-  const gateways: SocketGatewayInfo[] = [];
-
-  const sourceFiles = project.getSourceFiles();
-
-  for (const file of sourceFiles) {
-    const gatewayClasses = file
-      .getClasses()
-      .filter((cls) =>
-        cls.getDecorators().some((d) => d.getName() === 'WebSocketGateway'),
-      );
-
-    for (const gatewayClass of gatewayClasses) {
-      const gatewayInfo: SocketGatewayInfo = {
-        name: gatewayClass.getName() ?? 'UnnamedGateway',
-        filePath: file.getFilePath(),
-        subscribedMessages: [],
-        emittedEvents: [],
-      };
-
-      const methods = gatewayClass.getMethods();
-      for (const method of methods) {
-        const subscribeDecorator = method.getDecorator('SubscribeMessage');
-        if (subscribeDecorator) {
-          gatewayInfo.subscribedMessages.push(
-            parseSubscribedMessage(method, subscribeDecorator),
-          );
-        }
-        gatewayInfo.emittedEvents.push(...parseEmittedEvents(method));
-      }
-
-      // Deduplicate emitted events
-      gatewayInfo.emittedEvents = gatewayInfo.emittedEvents.filter(
-        (event, index, self) =>
-          index === self.findIndex((e) => e.eventName === event.eventName),
-      );
-
-      gateways.push(gatewayInfo);
+function findFiles(dir: string, filter: RegExp): string[] {
+  const files: string[] = [];
+  const dirContent = fs.readdirSync(dir);
+  for (const file of dirContent) {
+    const filePath = path.join(dir, file);
+    if (fs.statSync(filePath).isDirectory()) {
+      files.push(...findFiles(filePath, filter));
+    } else if (filter.test(file)) {
+      files.push(filePath);
     }
   }
+  return files;
+}
+
+export function parseWebSockets(projectPath: string): SocketGatewayInfo[] {
+  const gateways: SocketGatewayInfo[] = [];
+
+  const nestFiles = findFiles(projectPath, /\.(ts|js)$/)
+    .filter(file => !file.includes('node_modules'));
+
+  nestFiles.forEach(file => {
+    const content = fs.readFileSync(file, 'utf-8');
+    
+    // Skip if it's a type definition file
+    if (file.endsWith('.d.ts')) return;
+    
+    // More precise gateway detection
+    const isGateway = (
+      (content.includes('@WebSocketGateway') && 
+       content.match(/class\s+\w+/)) ||
+      content.includes('@SubscribeMessage(')
+    );
+    
+    if (isGateway) {
+      const nameMatch = content.match(/class\s+(\w+)/);
+      const namespaceMatch = content.match(/@WebSocketGateway\(([^)]+)\)/);
+      
+      gateways.push({
+        name: nameMatch?.[1] || 'UnknownGateway',
+        path: path.relative(projectPath, file),
+        namespace: namespaceMatch?.[1]?.replace(/['"]/g, '') || '/',
+        type: 'nestjs-websocket'
+      });
+    }
+
+    // CQRS Event Bus WebSocket detection
+    if (
+      content.includes('@CqrsWebSocketGateway') ||
+      content.includes('CqrsWebSocketAdapter')
+    ) {
+      const nameMatch = content.match(/class\s+(\w+)/);
+
+      gateways.push({
+        name: nameMatch?.[1] || 'CqrsGateway',
+        path: path.relative(projectPath, file),
+        namespace: '/cqrs',
+        type: 'cqrs-websocket',
+      });
+    }
+  });
 
   return gateways;
 }

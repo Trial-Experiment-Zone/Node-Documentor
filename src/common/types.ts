@@ -30,11 +30,9 @@ export interface FunctionInfo {
 // The complete parsed data from any analyzer
 export interface ParsedProjectData {
   name: string;
-  description?: string;
-  entities: ClassInfo[];
-  classes: ClassInfo[];
-  functions: FunctionInfo[];
-  relationships?: EntityRelationship[]; // Optional support
+  path: string;
+  type: string;
+  [key: string]: any;
 }
 
 // Data needed to build the ERD
@@ -67,7 +65,9 @@ export interface SocketMessageInfo {
 
 export interface SocketGatewayInfo {
   name: string;
-  filePath: string;
-  subscribedMessages: SocketMessageInfo[];
-  emittedEvents: SocketMessageInfo[];
+  path: string;
+  namespace: string;
+  type: 'nestjs-websocket' | 'cqrs-websocket';
+  subscribedMessages?: SocketMessageInfo[];
+  emittedEvents?: SocketMessageInfo[];
 }

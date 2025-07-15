@@ -18,6 +18,7 @@ import { ParsedProjectData, SocketGatewayInfo } from '../common/types';
 import { ErdGeneratorService } from '../generators/erd-generator.service';
 import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
 import { parseGoEndpoints } from 'src/scripts/go-api-parser.util';
+import { parseMongoSchemas } from '../parsers/nosql/mongo-parser';
 
 @Injectable()
 export class DocumentationService {
@@ -40,7 +41,18 @@ export class DocumentationService {
       throw new NotFoundException(`Project path not found: ${projectPath}`);
     }
 
-    const parsedData = await this.runGoParser(projectPath);
+    const existingParsedData = await this.runGoParser(projectPath);
+    const mongoSchemas = parseMongoSchemas(projectPath);
+    const parsedData = {
+      ...existingParsedData,
+      mongoSchemas,
+      name: path.basename(projectPath),
+      path: projectPath,
+      type: 'project',
+      description: existingParsedData.description,
+      entities: existingParsedData.entities,
+      relationships: existingParsedData.relationships
+    };
     let apiDocs = this.findAndParseApiSpec(projectPath);
 
     if (!apiDocs) {
@@ -115,6 +127,8 @@ export class DocumentationService {
       webSocketInfo = parseWebSockets(projectPath);
     }
 
+    const alembicMigrations = detectAlembicMigrations(projectPath);
+
     // Generate Markdown content
     const databaseTables = parsedData.entities || [];
     const formattedTables = databaseTables
@@ -130,7 +144,8 @@ export class DocumentationService {
       erdMermaidCode,
       formattedTables,
       folderTree,
-      projectDescription
+      projectDescription,
+      alembicMigrations,
     );
 
     // Include formattedTables in the final markdown content
@@ -230,4 +245,10 @@ export class DocumentationService {
   private processFlowSummaries(summaries: FlowSummary[]): void {
     // Implementation using only FlowSummary properties
   }
+}
+
+function detectAlembicMigrations(projectPath: string): any[] {
+  // Implementation to detect Alembic migrations
+  // For demonstration purposes, return an empty array
+  return [];
 }

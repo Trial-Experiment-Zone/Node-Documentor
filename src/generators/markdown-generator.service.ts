@@ -6,6 +6,7 @@ import {
   SocketGatewayInfo,
   FlowSummary,
 } from '../common/types';
+import { formatMongoSchemas } from './markdown/nosql-generator';
 
 @Injectable()
 export class MarkdownGeneratorService {
@@ -18,7 +19,8 @@ export class MarkdownGeneratorService {
     erdMermaidCode: string,
     databaseTables: string,
     projectStructure: string,
-    projectDescription: string
+    projectDescription: string,
+    alembicMigrations: any[]
   ): string {
     let md = '';
 
@@ -48,6 +50,8 @@ export class MarkdownGeneratorService {
 `;
     md += `*   [Project Flows](#project-flows)
 `;
+    md += `*   [Database Migrations](#database-migrations)
+`;
     md += `
 ---
 
@@ -73,6 +77,16 @@ export class MarkdownGeneratorService {
     md += '```mermaid\n' + erdMermaidCode + '\n```\n\n';
     md += this.formatDatabaseTables(databaseTables);
     md += this.formatDjangoModels(djangoModels);
+    const sqlAlchemyModels = apiDocs.filter((d: any) => d.type === 'sqlalchemy-model');
+    if (sqlAlchemyModels.length > 0) {
+      md += this.formatSqlAlchemyModels(sqlAlchemyModels);
+    }
+    const mongoSchemas = apiDocs.filter(
+      (d: any) => d.type === 'mongo-schema' && d.fields
+    ) as any[];
+    if (mongoSchemas.length > 0) {
+      md += formatMongoSchemas(mongoSchemas);
+    }
     md += `
 ---
 
@@ -102,7 +116,17 @@ export class MarkdownGeneratorService {
 
 `;
 
-    // 7. Project Flows
+    // 7. Database Migrations
+    md += `## Database Migrations
+
+`;
+    md += this.formatAlembicMigrations(alembicMigrations);
+    md += `
+---
+
+`;
+
+    // 8. Project Flows
     md += `## Project Flows
 
 `;
@@ -197,6 +221,49 @@ export class MarkdownGeneratorService {
     return md;
   }
 
+  private formatSqlAlchemyModels(models: any[]): string {
+    if (!models || models.length === 0) return '';
+    
+    let md = '## SQLAlchemy Models\n\n';
+    const relationships: string[] = [];
+    
+    models.forEach(model => {
+      md += `### ${model.name}\n`;
+      md += `**File**: ${model.file}\n\n`;
+      
+      if (Object.keys(model.fields).length > 0) {
+        md += '#### Fields\n';
+        md += '| Name | Type | SQL Type | Arguments |\n';
+        md += '|------|------|----------|-----------|\n';
+        
+        Object.entries(model.fields).forEach(([name, field]: [string, any]) => {
+          const sqlType = field.args.find((a: string) => 
+            a.includes('String(') || a.includes('Integer') || a.includes('DateTime')
+          ) || '-';
+          md += `| ${name} | ${field.type} | ${sqlType} | ${field.args.filter((a: string) => !a.includes(field.type)).join(', ') || '-'} |\n`;
+          
+          // Track relationships for visualization
+          if (field.type === 'relationship') {
+            const target = field.args.find(a => a.includes('='))?.split('=')[1] || 'Unknown';
+            relationships.push(`${model.name} --> ${target.replace(/['"]/g, '')} : ${name}`);
+          }
+        });
+        
+        md += '\n';
+      }
+    });
+    
+    // Add Mermaid relationship diagram
+    if (relationships.length > 0) {
+      md += '### Relationships\n\n';
+      md += '```mermaid\nclassDiagram\n';
+      md += relationships.join('\n');
+      md += '\n```\n\n';
+    }
+    
+    return md;
+  }
+
   private getEndpointPath(flow: IdentifiedFlow): string {
     // Extract from Flask routes like @app.route('/login')
     const flaskRoute = flow.relevantCode.match(/@\w+\.route\(['"]([^'"]+)['"]/)?.[1];
@@ -278,35 +345,40 @@ export class MarkdownGeneratorService {
     return markdown;
   }
 
+  private formatAlembicMigrations(migrations: any[]): string {
+    if (!migrations || migrations.length === 0) return '';
+    
+    let md = '## Database Migrations\n\n';
+    md += '| Migration File | Description |\n';
+    md += '|----------------|-------------|\n';
+    
+    migrations.forEach(migration => {
+      md += `| ${migration.file} | ${migration.description} |\n`;
+    });
+    
+    md += '\n';
+    return md;
+  }
+
   private formatWebSockets(gateways: SocketGatewayInfo[]): string {
-    if (!gateways || gateways.length === 0)
-      return 'No WebSocket gateways found.\n\n';
-
-    let md = '';
-    gateways.forEach((gateway) => {
-      md += `### Gateway: \`${gateway.name}\`\n\n`;
-      md += `*Source: \`${gateway.filePath}\`*\n\n`;
-
-      if (gateway.subscribedMessages.length > 0) {
-        md += `#### Subscribed Messages\n\n`;
-        md += `| Event Name | Payload Type | Ack Type |\n`;
-        md += `|---|---|---|\n`;
-        gateway.subscribedMessages.forEach((msg) => {
-          md += `| \`${msg.eventName}\` | \`${msg.payload}\` | \`${msg.ack}\` |\n`;
-        });
-        md += '\n';
-      }
-
-      if (gateway.emittedEvents.length > 0) {
-        md += `#### Emitted Events\n\n`;
-        md += `| Event Name | Payload Type |\n`;
-        md += `|---|---|\n`;
-        gateway.emittedEvents.forEach((evt) => {
-          md += `| \`${evt.eventName}\` | \`${evt.payload}\` |\n`;
-        });
-        md += '\n';
+    if (!gateways || gateways.length === 0) return 'No WebSocket gateways found.\n\n';
+    
+    let md = '## WebSocket Gateways\n\n';
+    
+    gateways.forEach(gateway => {
+      md += `### ${gateway.name}\n`;
+      md += `**Type**: ${gateway.type === 'cqrs-websocket' ? 'CQRS Event Bus' : 'Standard'}\n`;
+      md += `**Namespace**: ${gateway.namespace}\n`;
+      md += `**File**: ${gateway.path}\n\n`;
+      
+      if (gateway.type === 'cqrs-websocket') {
+        md += '**CQRS Events**:\n';
+        md += '- Commands\n';
+        md += '- Queries\n';
+        md += '- Events\n\n';
       }
     });
+    
     return md;
   }
 }

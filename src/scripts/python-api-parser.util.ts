@@ -1,3 +1,4 @@
+import { findPythonFiles } from '../shared/file-utils';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Node, Project, SyntaxKind, Type } from 'ts-morph';
@@ -42,32 +43,6 @@ export function generatePythonApiDoc(projectPath: string): any[] {
   return controllers;
 }
 
-function findPythonFiles(dir: string): string[] {
-  const files: string[] = [];
-
-  function traverse(currentDir: string) {
-    const items = fs.readdirSync(currentDir);
-
-    for (const item of items) {
-      const fullPath = path.join(currentDir, item);
-      const stat = fs.statSync(fullPath);
-
-      if (
-        stat.isDirectory() &&
-        !item.startsWith('.') &&
-        item !== '__pycache__'
-      ) {
-        traverse(fullPath);
-      } else if (item.endsWith('.py')) {
-        files.push(fullPath);
-      }
-    }
-  }
-
-  traverse(dir);
-  return files;
-}
-
 function parsePythonFile(filePath: string): any[] {
   const content = fs.readFileSync(filePath, 'utf-8');
   const endpoints: any[] = [];
@@ -78,6 +53,7 @@ function parsePythonFile(filePath: string): any[] {
   
   if (filePath.endsWith('models.py')) {
     endpoints.push(...parseDjangoModels(content, filePath));
+    endpoints.push(...parseSqlAlchemyModels(content, filePath));
   }
 
   // Existing parsing for other frameworks
@@ -370,6 +346,67 @@ function parseDjangoModels(content: string, filePath: string): any[] {
   return models;
 }
 
+function parseSqlAlchemyModels(content: string, filePath: string): any[] {
+  const models: any[] = [];
+  const lines = content.split('\n');
+  let currentModel: string | null = null;
+
+  // Extended type mapping
+  const typeMapping: Record<string, string> = {
+    'Integer': 'Integer',
+    'String': 'String', 
+    'Text': 'Text',
+    'DateTime': 'DateTime',
+    'Boolean': 'Boolean',
+    'Float': 'Float',
+    'JSON': 'JSON',
+    'ARRAY': 'ARRAY',
+    'Enum': 'Enum',
+    'LargeBinary': 'LargeBinary'
+  };
+
+  lines.forEach(line => {
+    // SQLAlchemy model detection
+    const modelMatch = line.match(/class\s+(\w+)\(\s*Base\)/);
+    if (modelMatch) {
+      currentModel = modelMatch[1];
+      models.push({
+        name: currentModel,
+        type: 'sqlalchemy-model',
+        fields: {},
+        file: filePath
+      });
+      return;
+    }
+
+    // Enhanced field detection
+    if (currentModel) {
+      const fieldMatch = line.match(/(\w+)\s*=\s*(Column|relationship)\(([^)]*)/);
+      if (fieldMatch) {
+        const [_, name, decorator, args] = fieldMatch;
+        
+        // Detect type from args
+        let type = 'Unknown';
+        for (const [key, value] of Object.entries(typeMapping)) {
+          if (args.includes(key)) {
+            type = value;
+            break;
+          }
+        }
+        
+        models.find(m => m.name === currentModel)!.fields[name] = {
+          type: decorator === 'relationship' ? 'Relationship' : type,
+          args: args.split(',')
+            .map(a => a.trim())
+            .filter(a => a && !a.includes(type))
+        };
+      }
+    }
+  });
+
+  return models;
+}
+
 function parseDjangoRestSerializers(content: string, filePath: string): any[] {
   const serializers: any[] = [];
 
@@ -439,6 +476,21 @@ function parseDjangoRestSerializers(content: string, filePath: string): any[] {
   }
 
   return serializers;
+}
+
+function detectAlembicMigrations(projectPath: string): any[] {
+  try {
+    const migrationFiles = fs.readdirSync(path.join(projectPath, 'alembic/versions'))
+      .filter(file => file.endsWith('.py') && file.match(/^\d+_.+\.py$/));
+    
+    return migrationFiles.map(file => ({
+      type: 'alembic-migration',
+      file: path.join('alembic/versions', file),
+      description: file.split('_').slice(1).join('_').replace('.py', '')
+    }));
+  } catch {
+    return [];
+  }
 }
 
 function parseFieldArgs(args: string): Record<string, any> {
