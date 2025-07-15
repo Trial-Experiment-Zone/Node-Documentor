@@ -31,7 +31,10 @@ export function generatePythonApiDoc(projectPath: string): any[] {
         const pythonFiles = findPythonFiles(searchPath);
 
         for (const filePath of pythonFiles) {
-          const endpoints = parsePythonFile(filePath);
+          const endpoints = parsePythonFile(
+            fs.readFileSync(filePath, 'utf-8'),
+            filePath,
+          );
           controllers.push(...endpoints);
         }
       }
@@ -43,24 +46,24 @@ export function generatePythonApiDoc(projectPath: string): any[] {
   return controllers;
 }
 
-function parsePythonFile(filePath: string): any[] {
-  const content = fs.readFileSync(filePath, 'utf-8');
+function parsePythonFile(content: string, filePath: string): any[] {
   const endpoints: any[] = [];
 
+  // Check if this is a Django URL file
   if (filePath.includes('urls.py') || filePath.includes('/urls/')) {
     endpoints.push(...parseDjangoEndpoints(content, filePath));
   }
-  
+
+  // Check for models
   if (filePath.endsWith('models.py')) {
     endpoints.push(...parseDjangoModels(content, filePath));
     endpoints.push(...parseSqlAlchemyModels(content, filePath));
   }
 
-  // Existing parsing for other frameworks
-  const flaskEndpoints = parseFlaskEndpoints(content, filePath);
-  const fastApiEndpoints = parseFastApiEndpoints(content, filePath);
-  
-  endpoints.push(...flaskEndpoints, ...fastApiEndpoints);
+  // Parse other framework endpoints
+  endpoints.push(...parseFlaskEndpoints(content, filePath));
+  endpoints.push(...parseFastApiEndpoints(content, filePath));
+
   return endpoints;
 }
 
@@ -273,50 +276,79 @@ function parseFastApiEndpoints(content: string, filePath: string): any[] {
 
 function parseDjangoEndpoints(content: string, filePath: string): any[] {
   const endpoints: any[] = [];
-  
-  // Match both path() and re_path() patterns
-  const urlPattern = /(?:path|re_path)\(['"]([^'"]+)['"],\s*([^,)]+)/g;
-  
-  let match;
-  while ((match = urlPattern.exec(content)) !== null) {
-    const path = match[1] || '/undefined-path';
-    const viewName = match[2].trim();
-    
-    // Skip if path is empty
+
+  // Match Django URL patterns with docstrings
+  const urlPattern =
+    /(?:path|re_path)\(\s*['"]([^'"]+)['"],\s*([^,)]+)(?:,\s*name\s*=\s*['"]([^'"]+)['"])?/g;
+
+  // Match view functions/classes with docstrings
+  const viewDefPattern =
+    /(?:def\s+(\w+)\(|class\s+(\w+)\([^\)]*\)\s*:)[^\n]*\n\s*"""([\s\S]*?)"""/g;
+
+  // Extract all views first
+  const views = new Map<string, { docstring?: string; methods?: string[] }>();
+  let viewMatch;
+  while ((viewMatch = viewDefPattern.exec(content)) !== null) {
+    const viewName = viewMatch[1] || viewMatch[2];
+    const docstring = viewMatch[3]?.trim();
+    views.set(viewName, { docstring });
+  }
+
+  // Process URL patterns
+  let urlMatch;
+  while ((urlMatch = urlPattern.exec(content)) !== null) {
+    const path = urlMatch[1] || '/undefined-path';
+    const viewRef = urlMatch[2].trim();
+    const name = urlMatch[3];
+
     if (!path || path === '/undefined-path') continue;
-    
-    // Determine HTTP methods
+
+    // Extract view name (handling both direct and dotted references)
+    const viewName = viewRef.split('.').pop()?.replace(/\)$/, '') || '';
+    const viewInfo = views.get(viewName) || {};
+
+    // Determine HTTP methods from view name/path
     let methods = ['GET'];
-    if (/create|register|add|post/i.test(path)) methods = ['POST'];
-    else if (/edit|update|put/i.test(path)) methods = ['PUT', 'PATCH'];
-    else if (/delete|remove/i.test(path)) methods = ['DELETE'];
-    
+    if (/(create|register|add|post)/i.test(path)) methods = ['POST'];
+    else if (/(edit|update|put)/i.test(path)) methods = ['PUT', 'PATCH'];
+    else if (/(delete|remove)/i.test(path)) methods = ['DELETE'];
+
+    // Extract path parameters
+    const parameters = [...path.matchAll(/<(?:(\w+):)?(\w+)>/g)].map(
+      (match) => ({
+        name: match[2],
+        type: match[1] || 'str',
+        in: 'path',
+        required: true,
+      }),
+    );
+
     endpoints.push({
       path,
       methods,
+      name,
       file: filePath,
       framework: 'django',
-      parameters: path.match(/<\w+:\w+>/g)?.map(p => ({
-        name: p.replace(/[<>]/g, '').split(':')[1],
-        type: p.replace(/[<>]/g, '').split(':')[0]
-      })) || []
+      description: viewInfo.docstring,
+      parameters,
+      view: viewRef,
     });
   }
-  
+
   return endpoints;
 }
 
 function parseDjangoModels(content: string, filePath: string): any[] {
   const models: any[] = [];
-  
+
   // Skip if not models.py
   if (!filePath.endsWith('models.py')) return models;
-  
+
   const lines = content.split('\n');
   let currentModel: string | null = null;
-  let currentFields: Record<string, any> = {};
-  
-  lines.forEach(line => {
+  const currentFields: Record<string, any> = {};
+
+  lines.forEach((line) => {
     // Model class detection
     const modelMatch = line.match(/class\s+(\w+)\(\s*models\.Model\):/);
     if (modelMatch) {
@@ -325,24 +357,27 @@ function parseDjangoModels(content: string, filePath: string): any[] {
         name: currentModel,
         type: 'django-model',
         fields: {},
-        file: filePath
+        file: filePath,
       });
       return;
     }
-    
+
     // Field detection
     if (currentModel) {
       const fieldMatch = line.match(/(\w+)\s*=\s*models\.(\w+)\(([^)]*)/);
       if (fieldMatch) {
         const [_, name, type, args] = fieldMatch;
-        models.find(m => m.name === currentModel)!.fields[name] = {
+        models.find((m) => m.name === currentModel)!.fields[name] = {
           type,
-          args: args.split(',').map(a => a.trim()).filter(a => a)
+          args: args
+            .split(',')
+            .map((a) => a.trim())
+            .filter((a) => a),
         };
       }
     }
   });
-  
+
   return models;
 }
 
@@ -353,19 +388,19 @@ function parseSqlAlchemyModels(content: string, filePath: string): any[] {
 
   // Extended type mapping
   const typeMapping: Record<string, string> = {
-    'Integer': 'Integer',
-    'String': 'String', 
-    'Text': 'Text',
-    'DateTime': 'DateTime',
-    'Boolean': 'Boolean',
-    'Float': 'Float',
-    'JSON': 'JSON',
-    'ARRAY': 'ARRAY',
-    'Enum': 'Enum',
-    'LargeBinary': 'LargeBinary'
+    Integer: 'Integer',
+    String: 'String',
+    Text: 'Text',
+    DateTime: 'DateTime',
+    Boolean: 'Boolean',
+    Float: 'Float',
+    JSON: 'JSON',
+    ARRAY: 'ARRAY',
+    Enum: 'Enum',
+    LargeBinary: 'LargeBinary',
   };
 
-  lines.forEach(line => {
+  lines.forEach((line) => {
     // SQLAlchemy model detection
     const modelMatch = line.match(/class\s+(\w+)\(\s*Base\)/);
     if (modelMatch) {
@@ -374,17 +409,19 @@ function parseSqlAlchemyModels(content: string, filePath: string): any[] {
         name: currentModel,
         type: 'sqlalchemy-model',
         fields: {},
-        file: filePath
+        file: filePath,
       });
       return;
     }
 
     // Enhanced field detection
     if (currentModel) {
-      const fieldMatch = line.match(/(\w+)\s*=\s*(Column|relationship)\(([^)]*)/);
+      const fieldMatch = line.match(
+        /(\w+)\s*=\s*(Column|relationship)\(([^)]*)/,
+      );
       if (fieldMatch) {
         const [_, name, decorator, args] = fieldMatch;
-        
+
         // Detect type from args
         let type = 'Unknown';
         for (const [key, value] of Object.entries(typeMapping)) {
@@ -393,12 +430,13 @@ function parseSqlAlchemyModels(content: string, filePath: string): any[] {
             break;
           }
         }
-        
-        models.find(m => m.name === currentModel)!.fields[name] = {
+
+        models.find((m) => m.name === currentModel)!.fields[name] = {
           type: decorator === 'relationship' ? 'Relationship' : type,
-          args: args.split(',')
-            .map(a => a.trim())
-            .filter(a => a && !a.includes(type))
+          args: args
+            .split(',')
+            .map((a) => a.trim())
+            .filter((a) => a && !a.includes(type)),
         };
       }
     }
@@ -480,13 +518,14 @@ function parseDjangoRestSerializers(content: string, filePath: string): any[] {
 
 function detectAlembicMigrations(projectPath: string): any[] {
   try {
-    const migrationFiles = fs.readdirSync(path.join(projectPath, 'alembic/versions'))
-      .filter(file => file.endsWith('.py') && file.match(/^\d+_.+\.py$/));
-    
-    return migrationFiles.map(file => ({
+    const migrationFiles = fs
+      .readdirSync(path.join(projectPath, 'alembic/versions'))
+      .filter((file) => file.endsWith('.py') && file.match(/^\d+_.+\.py$/));
+
+    return migrationFiles.map((file) => ({
       type: 'alembic-migration',
       file: path.join('alembic/versions', file),
-      description: file.split('_').slice(1).join('_').replace('.py', '')
+      description: file.split('_').slice(1).join('_').replace('.py', ''),
     }));
   } catch {
     return [];
@@ -810,4 +849,26 @@ function extractTypeFieldsByType(
     name: classDecl.getName() || typeText,
     fields,
   };
+}
+
+export function parsePythonApis(projectPath: string): any[] {
+  const endpoints: any[] = [];
+
+  // Find all Python files in the project
+  const pythonFiles = findPythonFiles(projectPath);
+
+  // Parse each file for API endpoints
+  pythonFiles.forEach((filePath) => {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      endpoints.push(...parsePythonFile(content, filePath));
+    } catch (error) {
+      console.error(`Error parsing ${filePath}:`, error);
+    }
+  });
+
+  // Add any detected migrations
+  endpoints.push(...detectAlembicMigrations(projectPath));
+
+  return endpoints;
 }

@@ -168,29 +168,32 @@ export class MarkdownGeneratorService {
   private formatDjangoEndpoints(endpoints: any[]): string {
     if (!endpoints || endpoints.length === 0) return '';
     
-    // Filter out invalid endpoints
-    const validEndpoints = endpoints.filter(e => 
-      e.path && 
-      e.path !== '/undefined-path' && 
-      e.methods?.length > 0
-    );
-    
-    if (validEndpoints.length === 0) return '';
-    
     let md = '## Django API Endpoints\n\n';
     
-    validEndpoints.forEach(endpoint => {
+    endpoints.forEach(endpoint => {
       md += `### ${endpoint.path}\n`;
-      md += `**Methods**: ${endpoint.methods.join(', ')}\n`;
+      
+      if (endpoint.name) {
+        md += `**Name**: ${endpoint.name}\n`;
+      }
+      
+      md += `**Methods**: ${endpoint.methods?.join(', ') || 'GET'}\n`;
+      md += `**File**: ${endpoint.file}\n`;
+      
+      if (endpoint.description) {
+        md += `\n${endpoint.description}\n`;
+      }
       
       if (endpoint.parameters?.length > 0) {
-        md += '**Parameters**:\n';
+        md += '\n**Parameters**:\n';
+        md += '| Name | Type | Required | Description |\n';
+        md += '|------|------|----------|-------------|\n';
         endpoint.parameters.forEach((param: any) => {
-          md += `- ${param.name} (${param.type})\n`;
+          md += `| ${param.name} | ${param.type} | ${param.required ? 'Yes' : 'No'} | ${param.description || '-'} |\n`;
         });
       }
       
-      md += `**File**: ${endpoint.file}\n\n`;
+      md += '\n';
     });
     
     return md;
