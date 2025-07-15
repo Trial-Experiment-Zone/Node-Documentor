@@ -1,6 +1,70 @@
 {
   "openapi": "3.0.0",
   "paths": {
+    "/documentation/files": {
+      "get": {
+        "operationId": "DocumentationController_getOutputFiles",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Files retrieved successfully"
+          },
+          "404": {
+            "description": "Output directory not found"
+          }
+        },
+        "summary": "Get list of generated documentation files",
+        "tags": [
+          "Documentation"
+        ]
+      }
+    },
+    "/documentation/file": {
+      "get": {
+        "operationId": "DocumentationController_getFileContent",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Get content of a documentation file",
+        "tags": [
+          "Documentation"
+        ]
+      },
+      "delete": {
+        "operationId": "DocumentationController_deleteFile",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Delete a documentation file",
+        "tags": [
+          "Documentation"
+        ]
+      }
+    },
     "/documentation/generate": {
       "post": {
         "operationId": "DocumentationController_generateDocumentation",
@@ -21,6 +85,21 @@
           }
         },
         "summary": "Generate a Markdown documentation file for a project folder",
+        "tags": [
+          "Documentation"
+        ]
+      }
+    },
+    "/documentation/upload": {
+      "post": {
+        "operationId": "DocumentationController_uploadFiles",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "summary": "Upload project files",
         "tags": [
           "Documentation"
         ]

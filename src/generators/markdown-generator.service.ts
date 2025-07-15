@@ -7,6 +7,7 @@ import {
   FlowSummary,
 } from '../common/types';
 import { formatMongoSchemas } from './markdown/nosql-generator';
+import * as path from 'path';
 
 @Injectable()
 export class MarkdownGeneratorService {
@@ -22,12 +23,17 @@ export class MarkdownGeneratorService {
     projectDescription: string,
     alembicMigrations: any[]
   ): string {
-    let md = '';
+    const projectName = path.basename(process.cwd());
+
+    let md = `# ${projectName} Project Documentation\n\n`;
+
+    if (projectDescription && projectDescription !== 'No description available') {
+      md += `## Project Description\n\n${projectDescription}\n\n`;
+    } else {
+      md += `## Project Overview\n\nDocumentation for ${projectName}\n\n`;
+    }
 
     // 1. Title Page
-    md += `# Project Documentation: ${projectDescription}
-
-`;
     md += `**Generated on:** ${new Date().toLocaleDateString()}
 
 `;
