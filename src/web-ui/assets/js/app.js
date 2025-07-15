@@ -94,15 +94,26 @@ async function deleteFileManagerItem(path, type) {
 
 async function renameFileManagerPath(oldPath, newName) {
   try {
+    // Extract directory path and ensure new name maintains original location
+    const lastSlash = oldPath.lastIndexOf('/');
+    const directoryPath = lastSlash >= 0 ? oldPath.substring(0, lastSlash) : '';
+    const newPath = directoryPath ? `${directoryPath}/${newName}` : newName;
+    
     await fetch(`${config.apiBaseUrl}/file-manager/rename`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ oldPath, newPath: newName })
+      body: JSON.stringify({ 
+        oldPath: oldPath,
+        newPath: newPath
+      })
     });
-    loadProjectStructure();
-    showToast('Renamed', 'success');
-  } catch {
-    showToast('Error renaming', 'danger');
+    
+    // Reload the current directory to show changes
+    loadProjectStructure(directoryPath);
+    showToast('File renamed successfully', 'success');
+  } catch (error) {
+    console.error('Error renaming file:', error);
+    showToast('Error renaming file', 'danger');
   }
 }
 
