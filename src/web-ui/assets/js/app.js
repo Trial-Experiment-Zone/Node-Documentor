@@ -1,421 +1,220 @@
-// Configuration
+/* src/web-ui/assets/js/app.js */
 const config = {
-  apiBaseUrl: 'http://localhost:3000' // Base URL for API requests
+  apiBaseUrl: 'http://localhost:3000'
 };
 
-// Initialize Mermaid with dark theme
-mermaid.initialize({ 
-  startOnLoad: false, 
-  theme: 'dark',
-  fontFamily: '"Inter", sans-serif'
-});
+//
+// File-Manager: List / view / delete / rename
+//
 
-// Fetch project structure
-async function loadProjectStructure() {
+// 1. Load directory listing (root or sub-folder)
+async function loadProjectStructure(folder = '') {
   try {
-    const response = await fetch(`${config.apiBaseUrl}/documentation/project-structure`);
-    const data = await response.json();
-    renderFileTree(data);
-  } catch (error) {
-    console.error('Error loading project structure:', error);
-    document.getElementById('file-tree').innerHTML = 'Error loading project structure';
+    const res = await fetch(`${config.apiBaseUrl}/file-manager/list?folder=${encodeURIComponent(folder)}`);
+    const items = await res.json();
+    renderFileTree(items, document.getElementById('file-tree'));
+  } catch (err) {
+    console.error('Error loading project structure:', err);
+    document.getElementById('file-tree').innerHTML =
+      '<div class="text-red-400 p-4">Error loading project structure</div>';
   }
 }
 
-// Render file tree
-function renderFileTree(structure) {
-  const container = document.getElementById('file-tree');
+// 2. Render the tree into a nested list
+function renderFileTree(items, parent) {
+  parent.innerHTML = '';
+  const ul = document.createElement('ul');
+  items.forEach(item => {
+    const li = document.createElement('li');
+    li.className = 'p-2 hover:bg-primary-700 cursor-pointer flex justify-between items-center';
+    const span = document.createElement('span');
+    span.textContent = item.name;
+    span.className = item.isDirectory ? 'font-bold' : '';
+    span.addEventListener('click', () => {
+      item.isDirectory ? loadProjectStructure(item.path) : loadFileContent(item.path);
+    });
+    li.appendChild(span);
+
+    if (!item.isDirectory) {
+      const delBtn = document.createElement('button');
+      delBtn.innerHTML = '🗑';
+      delBtn.className = 'ml-2';
+      delBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        deleteFileManagerItem(item.path, 'file');
+      });
+      li.appendChild(delBtn);
+    }
+
+    ul.appendChild(li);
+  });
+  parent.appendChild(ul);
+}
+
+// 3. Load file contents
+async function loadFileContent(path) {
+  try {
+    const res = await fetch(`${config.apiBaseUrl}/file-manager/content?file=${encodeURIComponent(path)}`);
+    if (!res.ok) throw new Error('Failed to load file');
+    const text = await res.text();
+    document.getElementById('markdown-content').innerHTML =
+      `<pre class="bg-primary-800 p-4 rounded-lg overflow-x-auto text-blue-400">${escapeHtml(text)}</pre>`;
+  } catch (err) {
+    console.error('Error loading file content:', err);
+    document.getElementById('markdown-content').innerHTML =
+      '<div class="text-red-400 p-4">Error loading file content</div>';
+  }
+}
+
+// 4. Delete a file or folder
+async function deleteFileManagerItem(path, type) {
+  try {
+    const url = type === 'directory'
+      ? `${config.apiBaseUrl}/file-manager/folder?folder=${encodeURIComponent(path)}`
+      : `${config.apiBaseUrl}/file-manager/file?file=${encodeURIComponent(path)}`;
+    const res = await fetch(url, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Delete failed');
+    loadProjectStructure();
+    showToast(`${type === 'directory' ? 'Folder' : 'File'} deleted`, 'success');
+  } catch (err) {
+    console.error('Delete error:', err);
+    showToast('Error deleting item', 'error');
+  }
+}
+
+// 5. Rename (example usage, you'd wire this to a form/button)
+async function renameFileManagerPath(oldPath, newPath) {
+  try {
+    const res = await fetch(`${config.apiBaseUrl}/file-manager/rename`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oldPath, newPath })
+    });
+    if (!res.ok) throw new Error('Rename failed');
+    loadProjectStructure();
+    showToast('Renamed successfully', 'success');
+  } catch (err) {
+    console.error('Rename error:', err);
+    showToast('Error renaming', 'error');
+  }
+}
+
+//
+// Documentation: List / view / delete / generate
+//
+
+let currentDoc = null;
+
+// 6. List generated docs
+async function loadDocumentationFiles() {
+  try {
+    const res = await fetch(`${config.apiBaseUrl}/documentation/files`);
+    const files = await res.json();
+    renderDocumentationList(files);
+  } catch (err) {
+    console.error('Error loading docs:', err);
+    document.getElementById('output-files').innerHTML =
+      '<div class="text-red-400 p-4">Error loading documentation files</div>';
+  }
+}
+
+// 7. Render docs list
+function renderDocumentationList(files) {
+  const container = document.getElementById('output-files');
   container.innerHTML = '';
-  
-  function createTree(items, parentEl) {
-    const ul = document.createElement('ul');
-    items.forEach(item => {
-      const li = document.createElement('li');
-      li.className = 'mb-1';
-      
-      if (item.type === 'directory') {
-        li.innerHTML = `
-          <div class="flex items-center cursor-pointer text-blue-400 hover:text-blue-300">
-            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-            </svg>
-            ${item.name}
-          </div>
-        `;
-        
-        const childUl = document.createElement('ul');
-        childUl.className = 'ml-4 hidden';
-        li.appendChild(childUl);
-        
-        li.querySelector('div').addEventListener('click', () => {
-          childUl.classList.toggle('hidden');
-          
-          if (childUl.children.length === 0) {
-            loadDirectoryContents(item.path, childUl);
-          }
-        });
-      } else {
-        li.innerHTML = `
-          <div class="flex items-center cursor-pointer text-blue-400 hover:text-blue-300" data-path="${item.path}">
-            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            ${item.name}
-          </div>
-        `;
-        
-        li.querySelector('div').addEventListener('click', () => {
-          loadFileContent(item.path);
-        });
-      }
-      
-      ul.appendChild(li);
-    });
-    
-    parentEl.appendChild(ul);
-  }
-  
-  createTree(structure, container);
-}
-
-// Load directory contents
-async function loadDirectoryContents(directoryPath, parentElement) {
-  try {
-    const response = await fetch(`${config.apiBaseUrl}/file-manager/list?folder=${encodeURIComponent(directoryPath)}`);
-    const contents = await response.json();
-    
-    if (contents.length > 0) {
-      const ul = document.createElement('ul');
-      ul.className = 'ml-4';
-      
-      contents.forEach(item => {
-        const li = document.createElement('li');
-        li.className = 'mb-1 flex items-center gap-2';
-
-        // Name and icon
-        let inner = '';
-        if (item.isDirectory) {
-          inner = `
-            <div class="flex items-center cursor-pointer text-blue-400 hover:text-blue-300">
-              <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              <span class="folder-name">${item.name}</span>
-            </div>
-          `;
-        } else {
-          inner = `
-            <div class="flex items-center cursor-pointer text-blue-400 hover:text-blue-300" data-path="${item.path}">
-              <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span class="file-name">${item.name}</span>
-            </div>
-          `;
-        }
-        li.innerHTML = inner;
-
-        // Click to open (file or folder)
-        const mainDiv = li.querySelector('div');
-        if (item.isDirectory) {
-          const childUl = document.createElement('ul');
-          childUl.className = 'ml-4 hidden';
-          li.appendChild(childUl);
-          mainDiv.addEventListener('click', () => {
-            childUl.classList.toggle('hidden');
-            if (childUl.children.length === 0) {
-              loadDirectoryContents(item.path, childUl);
-            }
-          });
-        } else {
-          mainDiv.addEventListener('click', () => {
-            loadFileContent(item.path);
-          });
-        }
-
-        // Delete button
-        const delBtn = document.createElement('button');
-        delBtn.className = 'ml-2 text-xs text-red-400 hover:text-red-200 px-1 py-0.5 rounded';
-        delBtn.textContent = 'Delete';
-        delBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          if (!confirm(`Delete ${item.name}? This cannot be undone.`)) return;
-          const url = item.isDirectory
-            ? `${config.apiBaseUrl}/file-manager/folder?folder=${encodeURIComponent(item.path)}`
-            : `${config.apiBaseUrl}/file-manager/file?file=${encodeURIComponent(item.path)}`;
-          const resp = await fetch(url, { method: 'DELETE' });
-          if (resp.ok) {
-            showToast('Deleted successfully', 'success');
-            li.remove();
-          } else {
-            showToast('Delete failed', 'error');
-          }
-        });
-        li.appendChild(delBtn);
-
-        // Rename button
-        const renameBtn = document.createElement('button');
-        renameBtn.className = 'ml-2 text-xs text-blue-400 hover:text-blue-200 px-1 py-0.5 rounded';
-        renameBtn.textContent = 'Rename';
-        renameBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const newName = prompt('Enter new name:', item.name);
-          if (!newName || newName === item.name) return;
-          const oldPath = item.path;
-          const newPath = oldPath.replace(/[^/]+$/, newName);
-          const resp = await fetch(`${config.apiBaseUrl}/file-manager/rename`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ oldPath, newPath })
-          });
-          if (resp.ok) {
-            showToast('Renamed successfully', 'success');
-            if (item.isDirectory) {
-              mainDiv.querySelector('.folder-name').textContent = newName;
-            } else {
-              mainDiv.querySelector('.file-name').textContent = newName;
-            }
-          } else {
-            showToast('Rename failed', 'error');
-          }
-        });
-        li.appendChild(renameBtn);
-
-        ul.appendChild(li);
-      });
-      parentElement.appendChild(ul);
-    }
-  } catch (error) {
-    console.error('Error loading directory contents:', error);
-  }
-}
-
-// Load and render file content
-async function loadFileContent(filePath) {
-  try {
-    markdownContainer.innerHTML = '<div class="flex justify-center items-center h-full"><div class="animate-pulse text-green-300">Loading content...</div></div>';
-    
-    const response = await fetch(`${config.apiBaseUrl}/file-manager/content?file=${encodeURIComponent(filePath)}`);
-    if (!response.ok) throw new Error('Failed to load file');
-    
-    const content = await response.text();
-    
-    if (filePath.endsWith('.md')) {
-      // Render markdown with syntax highlighting
-      markdownContainer.innerHTML = `
-        <div class="max-w-4xl mx-auto prose prose-invert prose-sm md:prose-base">
-          ${marked.parse(content)}
-        </div>
-      `;
-      
-      // Initialize Mermaid diagrams
-      document.querySelectorAll('.mermaid').forEach(el => {
-        try {
-          mermaid.init(undefined, el);
-        } catch (error) {
-          console.error('Mermaid error:', error);
-          el.innerHTML = `<div class="text-red-400">Diagram rendering error: ${error.message}</div>`;
-        }
-      });
-    } else {
-      // Display raw content with syntax highlighting
-      markdownContainer.innerHTML = `
-        <div class="max-w-4xl mx-auto">
-          <pre class="bg-primary-800 p-4 rounded-lg overflow-x-auto"><code class="text-blue-400">${escapeHtml(content)}</code></pre>
-        </div>
-      `;
-    }
-  } catch (error) {
-    console.error('Error loading file:', error);
-    markdownContainer.innerHTML = '<div class="text-center text-red-400 py-8">Error loading file content</div>';
-  }
-}
-
-// Handle project upload
-async function handleProjectUpload(e) {
-  try {
-    const files = e.target.files;
-    if (!files.length) return;
-    
-    showToast('Generating documentation...', 'info');
-    
-    // Get the directory path from the first file's webkitRelativePath
-    const directoryPath = files[0].webkitRelativePath 
-      ? `/${files[0].webkitRelativePath.split('/')[0]}` 
-      : files[0].path.split('/').slice(0, -1).join('/');
-    
-    // Reset file input
-    e.target.value = '';
-    
-    const response = await fetch(`${config.apiBaseUrl}/documentation/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        projectPath: directoryPath
-      })
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Documentation generation failed');
-    }
-    
-    await loadOutputFiles();
-    showToast('Documentation generated successfully', 'success');
-  } catch (error) {
-    console.error('Generation error:', error);
-    showToast(error.message || 'Error generating documentation', 'error');
-  }
-}
-
-// Load output files from backend
-async function loadOutputFiles() {
-  try {
-    outputFilesContainer.innerHTML = '<div class="p-4 text-center text-gray-500">Loading files...</div>';
-    
-    const response = await fetch(`${config.apiBaseUrl}/documentation/files`);
-    if (!response.ok) throw new Error('Failed to load files');
-    
-    const files = await response.json();
-    renderFileList(files);
-  } catch (error) {
-    console.error('Error loading files:', error);
-    outputFilesContainer.innerHTML = '<div class="p-4 text-center text-red-500">Error loading files</div>';
-  }
-}
-
-// Render file list
-function renderFileList(files) {
-  outputFilesContainer.innerHTML = '';
-  
-  if (!files.length) {
-    outputFilesContainer.innerHTML = '<div class="p-4 text-center text-blue-400">No documentation files found</div>';
-    return;
-  }
-  
   files.forEach(file => {
-    const fileEl = document.createElement('div');
-    fileEl.className = 'file-item flex items-center justify-between p-3 hover:bg-primary-700 cursor-pointer';
-    fileEl.innerHTML = `
-      <div class="flex items-center truncate text-blue-400" data-path="${file.path}">
-        <svg class="flex-shrink-0 w-5 h-5 mr-3 ${file.type === 'directory' ? 'text-blue-400' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="${file.type === 'directory' ? 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' : 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'}" />
-        </svg>
-        <span class="truncate">${file.name}</span>
-      </div>
-      ${file.size ? `<span class="text-xs text-blue-400">${file.size}</span>` : ''}
-    `;
-    
-    fileEl.addEventListener('click', () => {
-      if (file.type === 'file') {
-        currentFile = file.path;
-        document.getElementById('file-title').textContent = file.name;
-        loadFileContent(file.path);
-      }
+    const div = document.createElement('div');
+    div.className = 'p-2 hover:bg-primary-700 cursor-pointer flex justify-between';
+    div.textContent = file.name;
+    div.addEventListener('click', () => {
+      currentDoc = file.path;
+      document.getElementById('file-title').textContent = file.name;
+      loadDocumentationContent(file.path);
     });
-    
-    outputFilesContainer.appendChild(fileEl);
+    container.appendChild(div);
   });
 }
 
-// Delete current file
-async function deleteCurrentFile() {
-  if (!currentFile) {
-    showToast('No file selected', 'warning');
-    return;
-  }
-  
+// 8. View a doc
+async function loadDocumentationContent(path) {
   try {
-    // Confirm deletion
-    if (!confirm(`Delete ${currentFile.split('/').pop()}? This cannot be undone.`)) return;
-    
-    // Delete file via API
-    const response = await fetch(`${config.apiBaseUrl}/documentation/file?path=${encodeURIComponent(currentFile)}`, {
+    const res = await fetch(`${config.apiBaseUrl}/documentation/file?path=${encodeURIComponent(path)}`);
+    if (!res.ok) throw new Error('Failed to load doc');
+    const text = await res.text();
+    const contentEl = document.querySelector('#markdown-content .prose');
+    contentEl.innerHTML = marked.parse(text);
+    mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+  } catch (err) {
+    console.error('Error loading doc content:', err);
+    document.getElementById('markdown-content').innerHTML =
+      '<div class="text-red-400 p-4">Error loading documentation content</div>';
+  }
+}
+
+// 9. Delete a doc
+async function deleteDocumentationFile() {
+  if (!currentDoc) { showToast('No file selected', 'warning'); return; }
+  try {
+    const res = await fetch(`${config.apiBaseUrl}/documentation/file?path=${encodeURIComponent(currentDoc)}`, {
       method: 'DELETE'
     });
-    
-    if (!response.ok) throw new Error('Delete failed');
-    
-    // Refresh file list
-    await loadOutputFiles();
-    
-    // Clear viewer
-    markdownContainer.innerHTML = '<div class="flex items-center justify-center h-full text-gray-500">Select a file to view</div>';
-    document.getElementById('file-title').textContent = 'Select a file to view';
-    currentFile = null;
-    
-    showToast('File deleted', 'success');
-  } catch (error) {
-    console.error('Delete error:', error);
-    showToast('Error deleting file', 'error');
+    if (!res.ok) throw new Error('Delete failed');
+    loadDocumentationFiles();
+    document.getElementById('markdown-content').innerHTML = '';
+    showToast('Documentation deleted', 'success');
+  } catch (err) {
+    console.error('Delete doc error:', err);
+    showToast('Error deleting documentation', 'error');
   }
 }
 
-// Show toast notification
-function showToast(message, type = 'info') {
-  toast.textContent = message;
-  toast.className = `fixed bottom-4 right-4 px-4 py-2 rounded-md shadow-lg text-sm font-medium animate-fade-in ${type === 'error' ? 'bg-red-900/80 border-red-700 text-red-100' : type === 'success' ? 'bg-green-900/80 border-green-700 text-green-100' : 'bg-primary-700 border-primary-600 text-blue-400'}`;
-  
-  setTimeout(() => {
-    toast.classList.remove('animate-fade-in');
-    toast.classList.add('animate-fade-out');
-    setTimeout(() => toast.classList.add('hidden'), 150);
-  }, 3000);
-}
-
-// Helper function to escape HTML
-function escapeHtml(unsafe) {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-// DOM Elements
-const uploadInput = document.getElementById('project-upload');
-const refreshBtn = document.getElementById('refresh-files');
-const deleteBtn = document.getElementById('delete-file');
-const outputFilesContainer = document.getElementById('output-files');
-const markdownContainer = document.getElementById('markdown-content');
-const toast = document.getElementById('toast');
-let currentFile = null;
-
-// Style upload button while preserving text
-if (uploadInput) {
-  const uploadLabel = uploadInput.closest('label') || uploadInput.previousElementSibling;
-  if (uploadLabel) {
-    uploadLabel.className = 'flex items-center justify-center px-4 py-2 bg-primary-800 rounded-md text-blue-400 hover:bg-primary-700 border border-blue-400 transition-colors cursor-pointer';
-    
-    // Add icon while preserving existing text
-    const icon = document.createElement('svg');
-    icon.className = 'w-5 h-5 mr-2 text-blue-400';
-    icon.setAttribute('fill', 'none');
-    icon.setAttribute('stroke', 'currentColor');
-    icon.setAttribute('viewBox', '0 0 24 24');
-    icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />';
-    uploadLabel.prepend(icon);
+// 10. Generate docs from a folder
+async function generateDocumentation(projectPath) {
+  try {
+    const res = await fetch(`${config.apiBaseUrl}/documentation/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectPath })
+    });
+    if (!res.ok) throw new Error('Generation failed');
+    showToast('Documentation generated', 'success');
+    loadDocumentationFiles();
+  } catch (err) {
+    console.error('Generate error:', err);
+    showToast('Error generating documentation', 'error');
   }
 }
 
-// Style action buttons
-if (refreshBtn) {
-  refreshBtn.className = 'flex items-center px-4 py-2 bg-primary-800 rounded-md text-blue-400 hover:bg-primary-700 border border-blue-400 transition-colors';
+// Utility: toast & HTML escape
+function showToast(message, type='info') {
+  const t = document.getElementById('toast');
+  t.textContent = message;
+  t.className = `fixed bottom-4 right-4 px-4 py-2 rounded-md shadow-lg text-sm font-medium ${
+    type==='error' ? 'bg-red-900' : type==='success' ? 'bg-green-900' : 'bg-primary-800'
+  }`;
+  t.classList.remove('hidden');
+  setTimeout(() => t.classList.add('hidden'), 3000);
+}
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-if (deleteBtn) {
-  deleteBtn.className = 'flex items-center px-4 py-2 bg-primary-800 rounded-md text-blue-400 hover:bg-primary-700 border border-blue-400 transition-colors';
-}
+// Wire up controls
+document.getElementById('refresh-structure').addEventListener('click', () => loadProjectStructure());
+document.getElementById('refresh-files').addEventListener('click', loadDocumentationFiles);
+document.getElementById('delete-file').addEventListener('click', deleteDocumentationFile);
+document.getElementById('project-upload').addEventListener('change', e => {
+  const dir = e.target.files[0]?.webkitRelativePath.split('/')[0] || '';
+  generateDocumentation(`/${dir}`);
+});
 
-// Event Listeners
-uploadInput.addEventListener('change', handleProjectUpload);
-refreshBtn.addEventListener('click', loadOutputFiles);
-deleteBtn.addEventListener('click', deleteCurrentFile);
-
-// Initialize
+// Initialize both panes
 loadProjectStructure();
-loadOutputFiles();
-markdownContainer.innerHTML = '<div class="flex items-center justify-center h-full text-gray-500">Select a file to view</div>';
+loadDocumentationFiles();
+
+/*
+  This script now:
+  - Uses `/file-manager/...` endpoints to browse, view, delete and rename project files.
+  - Uses `/documentation/...` endpoints to list, view, delete and generate Markdown docs.
+  - Hooks each button and list item to the correct controller path.  
+*/
