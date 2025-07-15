@@ -104,6 +104,122 @@
           "Documentation"
         ]
       }
+    },
+    "/file-manager/list": {
+      "get": {
+        "operationId": "FileManagerController_listFiles",
+        "parameters": [
+          {
+            "name": "folder",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "FileManager"
+        ]
+      }
+    },
+    "/file-manager/content": {
+      "get": {
+        "operationId": "FileManagerController_getFileContent",
+        "parameters": [
+          {
+            "name": "file",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "FileManager"
+        ]
+      }
+    },
+    "/file-manager/file": {
+      "delete": {
+        "operationId": "FileManagerController_deleteFile",
+        "parameters": [
+          {
+            "name": "file",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "FileManager"
+        ]
+      }
+    },
+    "/file-manager/folder": {
+      "delete": {
+        "operationId": "FileManagerController_deleteFolder",
+        "parameters": [
+          {
+            "name": "folder",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "FileManager"
+        ]
+      }
+    },
+    "/file-manager/rename": {
+      "patch": {
+        "operationId": "FileManagerController_rename",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "FileManager"
+        ]
+      }
     }
   },
   "info": {
@@ -117,6 +233,10 @@
   "components": {
     "schemas": {
       "CreateDocumentationDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RenameDto": {
         "type": "object",
         "properties": {}
       }

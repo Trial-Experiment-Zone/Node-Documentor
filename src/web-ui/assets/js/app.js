@@ -81,7 +81,7 @@ function renderFileTree(structure) {
 // Load directory contents
 async function loadDirectoryContents(directoryPath, parentElement) {
   try {
-    const response = await fetch(`${config.apiBaseUrl}/documentation/directory?path=${encodeURIComponent(directoryPath)}`);
+    const response = await fetch(`${config.apiBaseUrl}/file-manager/list?folder=${encodeURIComponent(directoryPath)}`);
     const contents = await response.json();
     
     if (contents.length > 0) {
@@ -90,47 +90,99 @@ async function loadDirectoryContents(directoryPath, parentElement) {
       
       contents.forEach(item => {
         const li = document.createElement('li');
-        li.className = 'mb-1';
-        
-        if (item.type === 'directory') {
-          li.innerHTML = `
+        li.className = 'mb-1 flex items-center gap-2';
+
+        // Name and icon
+        let inner = '';
+        if (item.isDirectory) {
+          inner = `
             <div class="flex items-center cursor-pointer text-blue-400 hover:text-blue-300">
               <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
               </svg>
-              ${item.name}
+              <span class="folder-name">${item.name}</span>
             </div>
           `;
-          
+        } else {
+          inner = `
+            <div class="flex items-center cursor-pointer text-blue-400 hover:text-blue-300" data-path="${item.path}">
+              <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span class="file-name">${item.name}</span>
+            </div>
+          `;
+        }
+        li.innerHTML = inner;
+
+        // Click to open (file or folder)
+        const mainDiv = li.querySelector('div');
+        if (item.isDirectory) {
           const childUl = document.createElement('ul');
           childUl.className = 'ml-4 hidden';
           li.appendChild(childUl);
-          
-          li.querySelector('div').addEventListener('click', () => {
+          mainDiv.addEventListener('click', () => {
             childUl.classList.toggle('hidden');
-            
             if (childUl.children.length === 0) {
               loadDirectoryContents(item.path, childUl);
             }
           });
         } else {
-          li.innerHTML = `
-            <div class="flex items-center cursor-pointer text-blue-400 hover:text-blue-300" data-path="${item.path}">
-              <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              ${item.name}
-            </div>
-          `;
-          
-          li.querySelector('div').addEventListener('click', () => {
+          mainDiv.addEventListener('click', () => {
             loadFileContent(item.path);
           });
         }
-        
+
+        // Delete button
+        const delBtn = document.createElement('button');
+        delBtn.className = 'ml-2 text-xs text-red-400 hover:text-red-200 px-1 py-0.5 rounded';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Delete ${item.name}? This cannot be undone.`)) return;
+          const url = item.isDirectory
+            ? `${config.apiBaseUrl}/file-manager/folder?folder=${encodeURIComponent(item.path)}`
+            : `${config.apiBaseUrl}/file-manager/file?file=${encodeURIComponent(item.path)}`;
+          const resp = await fetch(url, { method: 'DELETE' });
+          if (resp.ok) {
+            showToast('Deleted successfully', 'success');
+            li.remove();
+          } else {
+            showToast('Delete failed', 'error');
+          }
+        });
+        li.appendChild(delBtn);
+
+        // Rename button
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'ml-2 text-xs text-blue-400 hover:text-blue-200 px-1 py-0.5 rounded';
+        renameBtn.textContent = 'Rename';
+        renameBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const newName = prompt('Enter new name:', item.name);
+          if (!newName || newName === item.name) return;
+          const oldPath = item.path;
+          const newPath = oldPath.replace(/[^/]+$/, newName);
+          const resp = await fetch(`${config.apiBaseUrl}/file-manager/rename`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ oldPath, newPath })
+          });
+          if (resp.ok) {
+            showToast('Renamed successfully', 'success');
+            if (item.isDirectory) {
+              mainDiv.querySelector('.folder-name').textContent = newName;
+            } else {
+              mainDiv.querySelector('.file-name').textContent = newName;
+            }
+          } else {
+            showToast('Rename failed', 'error');
+          }
+        });
+        li.appendChild(renameBtn);
+
         ul.appendChild(li);
       });
-      
       parentElement.appendChild(ul);
     }
   } catch (error) {
@@ -143,7 +195,7 @@ async function loadFileContent(filePath) {
   try {
     markdownContainer.innerHTML = '<div class="flex justify-center items-center h-full"><div class="animate-pulse text-green-300">Loading content...</div></div>';
     
-    const response = await fetch(`${config.apiBaseUrl}/documentation/file?path=${encodeURIComponent(filePath)}`);
+    const response = await fetch(`${config.apiBaseUrl}/file-manager/content?file=${encodeURIComponent(filePath)}`);
     if (!response.ok) throw new Error('Failed to load file');
     
     const content = await response.text();
