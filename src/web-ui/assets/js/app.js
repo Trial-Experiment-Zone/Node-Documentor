@@ -3,7 +3,8 @@ const config = { apiBaseUrl: 'http://localhost:3000' };
 
 let currentDoc = null;
 let lastDocContent = '';
-let dualView = false;
+let currentView = 'plain'; // 'plain' or 'rendered'
+let zoomLevel = 1;
 
 //
 // File-Manager: List / view / delete / rename
@@ -72,15 +73,36 @@ async function loadFileContent(path) {
   try {
     const res = await fetch(`${config.apiBaseUrl}/file-manager/content?file=${encodeURIComponent(path)}`);
     const text = await res.text();
-    
+
+    currentDoc = path;
+    lastDocContent = text;
+    currentView = 'plain';
+    zoomLevel = 1;
+
     // Update UI
     document.getElementById('file-title').textContent = path.split('/').pop();
-    document.getElementById('empty-state').classList.add('d-none');
-    document.getElementById('rendered-view').classList.remove('d-none');
-    
-    document.getElementById('rendered-view').innerHTML = 
-      `<pre class="bg-light p-3 text-monospace">${escapeHtml(text)}</pre>`;
-  } catch {
+    document.getElementById('empty-state').style.display = 'none';
+
+    // Clear previous rendered content
+    document.getElementById('markdown-container').innerHTML = '';
+
+    // Set initial view to plain text
+    document.getElementById('plain-view').style.display = 'block';
+    document.getElementById('plain-text-content').textContent = text;
+    document.getElementById('rendered-view').style.display = 'none';
+    document.getElementById('zoom-controls').style.display = 'none';
+
+    // Show toggle button for supported file types
+    const toggleBtn = document.getElementById('toggle-view');
+    if (path.endsWith('.md') || path.endsWith('.mmd') || path.endsWith('.mermaid')) {
+      toggleBtn.style.display = 'inline-block';
+      toggleBtn.innerHTML = '<i class="fas fa-eye"></i>';
+      toggleBtn.onclick = toggleDualView;
+    } else {
+      toggleBtn.style.display = 'none';
+    }
+  } catch (err) {
+    console.error('Error loading file:', err);
     document.getElementById('empty-state').classList.add('d-none');
     document.getElementById('rendered-view').classList.remove('d-none');
     document.getElementById('rendered-view').innerHTML = 
@@ -182,13 +204,94 @@ function renderDocView(text) {
   const codeView = document.getElementById('code-view');
   document.getElementById('code-content').textContent = text;
 
-  if (dualView) codeView.classList.remove('d-none');
+  if (currentView === 'rendered') codeView.classList.remove('d-none');
   else codeView.classList.add('d-none');
 }
 
 function toggleDualView() {
-  dualView = !dualView;
-  if (lastDocContent) renderDocView(lastDocContent);
+  const plainView = document.getElementById('plain-view');
+  const renderedView = document.getElementById('rendered-view');
+  const toggleBtn = document.getElementById('toggle-view');
+  const zoomControls = document.getElementById('zoom-controls');
+  const markdownContainer = document.getElementById('markdown-container');
+
+  if (currentView === 'plain') {
+    // Switch to rendered view
+    plainView.style.display = 'none';
+    renderedView.style.display = 'block';
+    currentView = 'rendered';
+    toggleBtn.innerHTML = '<i class="fas fa-code"></i>';
+
+    if (currentDoc.endsWith('.md')) {
+      try {
+        if (window.marked && typeof marked.parse === 'function') {
+          markdownContainer.innerHTML = marked.parse(lastDocContent);
+        } else {
+          markdownContainer.innerHTML = '<div class="alert alert-danger">Markdown library not loaded</div>';
+        }
+      } catch (e) {
+        markdownContainer.innerHTML = '<div class="alert alert-danger">Markdown render error</div>';
+      }
+      zoomControls.style.display = 'none';
+    } else if (currentDoc.endsWith('.mmd') || currentDoc.endsWith('.mermaid')) {
+      try {
+        if (window.mermaid) {
+          markdownContainer.innerHTML = `<div class="mermaid">${lastDocContent}</div>`;
+          zoomControls.style.display = 'flex';
+          zoomLevel = 1;
+          mermaid.init(undefined, document.querySelector('.mermaid'));
+          setupZoomControls();
+        } else {
+          markdownContainer.innerHTML = '<div class="alert alert-danger">Mermaid.js not loaded</div>';
+          zoomControls.style.display = 'none';
+        }
+      } catch (e) {
+        markdownContainer.innerHTML = '<div class="alert alert-danger">Mermaid render error</div>';
+        zoomControls.style.display = 'none';
+      }
+    }
+  } else {
+    // Switch to plain view
+    renderedView.style.display = 'none';
+    plainView.style.display = 'block';
+    currentView = 'plain';
+    toggleBtn.innerHTML = '<i class="fas fa-eye"></i>';
+    zoomControls.style.display = 'none';
+    markdownContainer.innerHTML = '';
+  }
+}
+
+// Zoom functionality for mermaid diagrams
+function setupZoomControls() {
+  const zoomInBtn = document.getElementById('zoom-in');
+  const zoomOutBtn = document.getElementById('zoom-out');
+  const zoomResetBtn = document.getElementById('zoom-reset');
+
+  const updateZoom = () => {
+    const svg = document.querySelector('.mermaid svg');
+    if (svg) {
+      svg.style.transform = `scale(${zoomLevel})`;
+      svg.style.transformOrigin = 'top left';
+    }
+  };
+
+  zoomInBtn.onclick = () => {
+    zoomLevel = Math.min(zoomLevel + 0.1, 2);
+    updateZoom();
+  };
+
+  zoomOutBtn.onclick = () => {
+    zoomLevel = Math.max(zoomLevel - 0.1, 0.5);
+    updateZoom();
+  };
+
+  zoomResetBtn.onclick = () => {
+    zoomLevel = 1;
+    updateZoom();
+  };
+
+  // Initial zoom update
+  updateZoom();
 }
 
 async function deleteDocumentationFile() {
