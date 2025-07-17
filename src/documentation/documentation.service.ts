@@ -1,25 +1,23 @@
-import {
-  Injectable,
-  InternalServerErrorException,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { execFile } from 'child_process';
 import * as fs from 'fs';
-import * as glob from 'glob';
 import * as path from 'path';
-import { generateApiDoc } from 'src/scripts/api-parser.util';
-import { analyzeProjectFlows } from 'src/scripts/flow-analyzer.util';
-import { IdentifiedFlow, FlowSummary } from '../common/types';
-import { generatePythonApiDoc } from 'src/scripts/python-api-parser.util';
-import { parseWebSockets } from 'src/scripts/websocket-parser.util';
 import tree from 'tree-node-cli';
-import { ParsedProjectData, SocketGatewayInfo } from '../common/types';
+import {
+  ParsedProjectData,
+  SocketGatewayInfo,
+  IdentifiedFlow,
+  FlowSummary,
+} from '../common/types';
 import { ErdGeneratorService } from '../generators/erd-generator.service';
 import { MarkdownGeneratorService } from '../generators/markdown-generator.service';
-import { parseGoEndpoints } from 'src/scripts/go-api-parser.util';
+import { parseGoEndpoints } from '../scripts/go-api-parser.util';
 import { parseMongoSchemas } from '../parsers/nosql/mongo-parser';
-import { PythonApiParserService } from '../scripts/python-api-parser.service';
+import { execFile } from 'child_process';
+import { generateApiDoc } from '../scripts/api-parser.util';
+import { analyzeProjectFlows } from '../scripts/flow-analyzer.util';
+import { parseWebSockets } from '../scripts/websocket-parser.util';
+import { PythonApiParserService } from 'src/scripts/python-api-parser.service';
 
 @Injectable()
 export class DocumentationService {
@@ -59,7 +57,8 @@ export class DocumentationService {
     let apiDocs;
     if (this.isTypeScriptProject(projectPath)) {
       try {
-        apiDocs = generateApiDoc(projectPath);
+        const apiDocsFromSource = generateApiDoc(projectPath);
+        apiDocs = apiDocsFromSource;
       } catch (e) {
         console.error('Failed to generate API docs from source:', e);
         apiDocs = [];
@@ -156,6 +155,45 @@ export class DocumentationService {
     return finalMarkdown;
   }
 
+  async getOutputFiles(outputDir = 'output'): Promise<any[]> {
+    const fullPath = path.join(process.cwd(), outputDir);
+
+    try {
+      // Create directory if it doesn't exist
+      await fs.promises.mkdir(fullPath, { recursive: true });
+
+      const files = await fs.promises.readdir(fullPath, {
+        withFileTypes: true,
+      });
+
+      return Promise.all(
+        files.map(async (file) => {
+          const filePath = path.join(fullPath, file.name);
+          const stats = await fs.promises.stat(filePath);
+
+          return {
+            name: file.name,
+            path: filePath,
+            type: file.isDirectory() ? 'directory' : 'file',
+            size: stats.isFile() ? this.formatFileSize(stats.size) : '',
+            modified: stats.mtime.toISOString(),
+          };
+        }),
+      );
+    } catch (error) {
+      console.error('Error accessing output directory:', error);
+      throw new NotFoundException('Output directory not found');
+    }
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
   private findAndParseApiSpec(projectPath: string): any[] | null {
     const specFileNames = ['swagger-spec.json', 'openapi.json', 'swagger.json'];
     for (const fileName of specFileNames) {
@@ -178,7 +216,7 @@ export class DocumentationService {
       const executablePath = this.goParserExecutablePath;
       if (!fs.existsSync(executablePath)) {
         const errorMsg = `Go parser executable not found: ${executablePath}`;
-        return reject(new InternalServerErrorException(errorMsg));
+        return reject(new Error(errorMsg));
       }
 
       execFile(
@@ -188,20 +226,14 @@ export class DocumentationService {
         (error, stdout, stderr) => {
           if (error) {
             console.error(`Go Parser Error: ${stderr}`);
-            return reject(
-              new InternalServerErrorException('Go parser failed.'),
-            );
+            return reject(new Error('Go parser failed.'));
           }
           try {
             const parsedJson: ParsedProjectData = JSON.parse(stdout);
             resolve(parsedJson);
           } catch (err) {
             console.error(`JSON parsing error: ${err}. STDOUT: ${stdout}`);
-            reject(
-              new InternalServerErrorException(
-                'Failed to parse Go parser output.',
-              ),
-            );
+            reject(new Error('Failed to parse Go parser output.'));
           }
         },
       );
@@ -214,16 +246,18 @@ export class DocumentationService {
   }
 
   private async isPythonProject(projectPath: string): Promise<boolean> {
-    const pythonFiles = await glob.glob(path.join(projectPath, '**/*.py'), {
-      ignore: ['**/node_modules/**', '**/dist/**', '**/venv/**'],
-    });
+    const pythonFiles = await fs.promises.readdir(projectPath);
     const hasRequirementsTxt = fs.existsSync(
       path.join(projectPath, 'requirements.txt'),
     );
     const hasPyprojectToml = fs.existsSync(
       path.join(projectPath, 'pyproject.toml'),
     );
-    return pythonFiles.length > 0 || hasRequirementsTxt || hasPyprojectToml;
+    return (
+      pythonFiles.some((file) => file.endsWith('.py')) ||
+      hasRequirementsTxt ||
+      hasPyprojectToml
+    );
   }
 
   private isGoProject(projectPath: string): boolean {
