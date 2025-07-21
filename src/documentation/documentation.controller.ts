@@ -19,6 +19,10 @@ import { CreateDocumentationDto } from 'src/dtos/create-documentation.dto';
 import * as fs from 'fs';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import * as path from 'path';
+import * as unzipper from 'unzipper';
+import { firstValueFrom } from 'rxjs';
+import { HttpService } from '@nestjs/axios';
+import { cleanDirectories } from 'src/helpers/cleaner.utl';
 
 type UploadedFile = {
   fieldname: string;
@@ -32,7 +36,10 @@ type UploadedFile = {
 @ApiTags('Documentation')
 @Controller('documentation')
 export class DocumentationController {
-  constructor(private readonly documentationService: DocumentationService) {}
+  constructor(
+    private readonly documentationService: DocumentationService,
+    private readonly httpService: HttpService,
+  ) {}
 
   @Get('files')
   @ApiOperation({ summary: 'Get list of generated documentation files' })
@@ -97,9 +104,9 @@ export class DocumentationController {
   }
 
   @Post('upload')
-  @ApiOperation({ summary: 'Upload project files' })
+  @ApiOperation({ summary: 'Upload ZIP file and generate docs' })
   @UseInterceptors(FilesInterceptor('files'))
-  async uploadFiles(
+  async uploadAndGenerateDocs(
     @UploadedFiles() files: UploadedFile[],
     @Res() res: Response,
   ) {
@@ -108,23 +115,54 @@ export class DocumentationController {
         throw new BadRequestException('No files uploaded');
       }
 
-      const outputDir = path.join(process.cwd(), 'docs');
-      await fs.promises.mkdir(outputDir, { recursive: true });
+      const zipFile = files[0]; // assuming single zip file
+      const uploadDir = path.join(process.cwd(), 'uploads');
+      const unzipDir = path.join(process.cwd(), 'projects_to_document');
 
-      await Promise.all(
-        files.map(async (file) => {
-          const filePath = path.join(outputDir, file.originalname);
-          await fs.promises.writeFile(filePath, file.buffer);
+      // Ensure upload & unzip directories exist
+      await fs.promises.mkdir(uploadDir, { recursive: true });
+      await fs.promises.mkdir(unzipDir, { recursive: true });
+
+      const zipPath = path.join(uploadDir, zipFile.originalname);
+      await fs.promises.writeFile(zipPath, zipFile.buffer);
+
+      // Extract the zip
+      const extractPath = path.join(
+        unzipDir,
+        path.parse(zipFile.originalname).name,
+      );
+
+      await fs.promises.mkdir(extractPath, { recursive: true });
+
+      await new Promise<void>((resolve, reject) => {
+        const stream = fs
+          .createReadStream(zipPath)
+          .pipe(unzipper.Extract({ path: extractPath }));
+
+        stream.on('close', resolve);
+        stream.on('error', reject);
+      });
+
+      // Trigger documentation generation
+      const generateRes = await firstValueFrom(
+        this.httpService.post('http://localhost:3000/documentation/generate', {
+          projectPath: extractPath,
         }),
       );
 
+      const markdown = generateRes.data;
+
+      await cleanDirectories([uploadDir, unzipDir]);
+
       return res.status(HttpStatus.OK).json({
-        message: 'Files uploaded successfully',
+        message: 'Documentation generated successfully',
+        markdown,
       });
     } catch (error) {
-      console.error('Upload error:', error);
+      console.error('Error:', error);
       return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-        message: 'Failed to upload files',
+        message: 'Failed to process and generate docs',
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }

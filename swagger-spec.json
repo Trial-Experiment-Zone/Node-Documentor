@@ -92,14 +92,14 @@
     },
     "/documentation/upload": {
       "post": {
-        "operationId": "DocumentationController_uploadFiles",
+        "operationId": "DocumentationController_uploadAndGenerateDocs",
         "parameters": [],
         "responses": {
           "201": {
             "description": ""
           }
         },
-        "summary": "Upload project files",
+        "summary": "Upload ZIP file and generate docs",
         "tags": [
           "Documentation"
         ]
